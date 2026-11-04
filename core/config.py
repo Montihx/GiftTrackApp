@@ -79,7 +79,14 @@ class Settings(BaseSettings):
         default=5.0, description="Интервал поллинга маркетплейсов в секундах"
     )
 
-    
+    # --- Rarity counts (ЭТАП 6.5) ---
+    counts_update_interval: float = Field(
+        default=600.0, description="Пересчёт counts атрибутов (сек)"
+    )
+    rarity_sample_size: int = Field(
+        default=500, description="Сколько NFT брать для подсчёта редкости"
+    )
+
 
     def twa_secret_key(self) -> bytes:
         """
