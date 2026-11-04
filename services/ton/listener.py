@@ -104,31 +104,42 @@ class TonListener:
                 logger.error(f"Ошибка обработки коллекции {coll_name}: {exc!r}")
                 self.stats["errors"] += 1
 
-    async def _process_collection(
+        async def _process_collection(
         self, collection_id: str, collection_name: str, contract_addr: str
     ) -> None:
-        """Обработка одной коллекции: получение транзакций, парсинг, сохранение."""
-        # Загружаем последний обработанный timestamp для этой коллекции
+        """
+        Обработка одной коллекции: получение транзакций, отсечение обработанных,
+        парсинг, сохранение, публикация в Stream.
+
+        Dedupe: обрабатываются только транзакции с time > last_ts.
+        last_ts хранится в Redis (быстрый путь) и дублируется в listener_state
+        (переживает сброс Redis).
+        """
+        state_key = f"{TonState.STATE_KEY}:{collection_id}"
         cache_key = self.CACHE_LAST_TS_KEY.format(collection=collection_id)
+
+        # Быстрый путь: Redis; холодный старт: listener_state в БД
         last_ts = await cache_get_json(self.redis, cache_key)
         if last_ts is None:
-            last_ts = 0
+            last_ts = await self.state.load_last_timestamp(state_key)
+        last_ts = int(last_ts or 0)
 
-        # Получаем транзакции от Tonviewer
         transactions = await self._fetch_transactions(contract_addr, limit=100)
-
         if not transactions:
             self.stats["empty"] += 1
             return
 
-        # Парсим транзакции
-        events = parse_tonviewer_transactions(transactions, contract_addr, seqno=int(last_ts))
+        # Отсекаем уже обработанные транзакции (защита от дублей и спама)
+        fresh = [tx for tx in transactions if int(tx.get("time", 0)) > last_ts]
+        if not fresh:
+            self.stats["empty"] += 1
+            return
 
+        events = parse_tonviewer_transactions(fresh, contract_addr, seqno=last_ts)
         if events.is_empty():
             self.stats["empty"] += 1
             return
 
-        # Обрабатываем события
         max_ts = last_ts
         for mint in events.mints:
             await self._handle_mint(mint, collection_id)
@@ -140,12 +151,15 @@ class TonListener:
             max_ts = max(max_ts, int(transfer.timestamp.timestamp()))
             self.stats["transfers"] += 1
 
-        # Сохраняем последний timestamp
-        await cache_set_json(self.redis, cache_key, max_ts, ttl=86400)  # 24 часа
+        # Сохраняем прогресс: Redis (быстро) + listener_state (надёжно)
+        await cache_set_json(self.redis, cache_key, max_ts, ttl=86400)
+        await self.state.save_last_timestamp(max_ts, state_key)
+        await self.session.commit()
 
         logger.info(
             f"[{collection_name}] mints={len(events.mints)}, transfers={len(events.transfers)}"
         )
+
 
     async def _handle_mint(self, event: MintEvent, collection_id: str) -> None:
         """Обработка mint-события: скачивание metadata, сохранение в БД, публикация в Stream."""
