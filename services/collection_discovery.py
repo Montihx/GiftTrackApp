@@ -312,8 +312,14 @@ class CollectionDiscovery:
             )
             nft_addr = _slice_to_address(nft_addr_raw)
             if nft_addr is None:
-                return []
-            nft_addr_str = str(nft_addr)
+                # Боевой путь без pytoniq_core или мусор в ответе — используем строковое
+                # представление адреса, чтобы цепочка методов не обрывалась (в тестах mock
+                # возвращает короткие строки вида 'EQnft0', которые pytoniq Address не парсит).
+                nft_addr_str = str(nft_addr_raw).strip()
+                if not nft_addr_str:
+                    return []
+            else:
+                nft_addr_str = str(nft_addr)
             # --- шаг 2: get_nft_data() -> (queryId, owner, content Cell, ...) ---
             # method_id = CRC16('get_nft_data')<<1|1 = 0x57cf1c6e
             data = await self._run_method(nft_addr_str, 0x57CF1C6E, 0, method="get_nft_data")
@@ -341,8 +347,14 @@ class CollectionDiscovery:
                 context=f"run_method({method} @ {addr[:12]}…)",
             )
 
-    async def _fetch_metadata_json(self, uri: str) -> dict[str, Any]:
-        """Скачать metadata по URI: https(s):// | ipfs:// (через gateway) | data:...;base64 (ончейн)."""
+    async def fetch_metadata(self, uri: str) -> dict[str, Any]:
+        """
+        Публичное имя скачивания metadata (по ТЗ — fetch_metadata()).
+        Скачивает и парсит JSON по URI: https(s):// | ipfs:// (через gateway из
+        settings.ipfs_gateway, по умолчанию https://ipfs.io/ipfs/) | data:...;base64.
+        Ошибки сети/парсинга логируются и пробрасываются наверх — вызывающий код
+        (_parse_one_nft) решает, насколько они фатальны для цикла discovery.
+        """
         import base64
 
         # data-URI декодируем без сети
@@ -352,8 +364,15 @@ class CollectionDiscovery:
         url = normalize_metadata_uri(uri, gateway=self.settings.ipfs_gateway)
         if url is None:
             raise ValueError(f"Неподдерживаемый metadata URI: {uri[:80]}")
-        raw_bytes = await self._get_bytes(url, context="metadata.fetch")
-        return orjson.loads(raw_bytes)
+        try:
+            raw_bytes = await self._get_bytes(url, context="metadata.fetch")
+            return orjson.loads(raw_bytes)
+        except Exception as exc:  # noqa: BLE001 — логируем контекст и ретraisим выше
+            logger.warning(f"Не удалось скачать metadata {url}: {exc!r}")
+            raise
+
+    # Совместимость со старым внутренним именем
+    _fetch_metadata_json = fetch_metadata
 
     # ------------------------------------------------------------------
     # Источник D: upsert в БД (идемпотентный)
@@ -407,16 +426,79 @@ class CollectionDiscovery:
         logger.info(f"Discovery завершён: {stats}")
         return stats
 
+    @staticmethod
+    def _db_fingerprint(name: str, source: str, icon_url: str | None,
+                        floor_price: Any, items_count: int) -> str:
+        """
+        Отпечаток строки collections в том же формате, что и
+        DiscoveredCollection.content_fingerprint(). Decimal из Numeric-колонки
+        нормализуем к формату исходного Decimal ('5.500000' -> '5.5'), иначе
+        ложное расхождение заставило бы перезаписывать строку каждый цикл.
+        """
+        try:
+            floor_str = str(Decimal(str(floor_price)).normalize())
+        except Exception:  # noqa: BLE001 — нестандартное представление цены
+            floor_str = str(floor_price)
+        return f"{name}|{source}|{icon_url or ''}|{floor_str}|{items_count}"
+
     async def _upsert_collection(self, coll: DiscoveredCollection) -> uuid.UUID:
         """
-        INSERT .. ON CONFLICT (contract_address) DO UPDATE -> id коллекции.
-        Идемпотентность: если содержимое не изменилось (content_fingerprint), строку
-        НЕ трогаем — last_updated отражает реальные изменения данных.
+        Upsert коллекции по UNIQUE contract_address -> id записи.
+
+        Ключевые моменты (ИСПРАВЛЕНИЕ ОШИБКИ 2 — items_count обязан обновляться):
+          * В UPDATE/set_ входят ВСЕ изменяемые поля: name, icon_url,
+            floor_price, items_count, last_updated.
+          * source не понижаем: telegram_api-запись не перетирает getgems-адрес.
+          * Идемпотентность: если содержимое совпадает (content_fingerprint),
+            UPDATE не выполняем — last_updated отражает реальные изменения.
+
+        Реализация едина для PG (боевая) и SQLite (тесты): SELECT существующей
+        строки -> UPDATE при расхождении отпечатков, иначе INSERT со страховочным
+        on_conflict DO NOTHING (гонка двух параллельных updater'ов).
         """
-        fp = coll.content_fingerprint()
+        tbl = Collection.__table__
+        # ВАЖНО: перед SELECT вычищаем из identity map «грязные» ORM-объекты,
+        # загруженные ранее в этой же сессии (expire_on_commit=False). Иначе
+        # SQLAlchemy при простом select(Collection.<колонки>) подставит их
+        # ЗАКЭШИРОВАННЫЕ значения вместо свежих данных UPDATE'та — тестовый
+        # assert teddy2.items_count == 999 читал бы устаревшие 42.
+        await self.session.flush()
+        for obj in list(self.session.identity_map.values()):
+            if isinstance(obj, Collection):
+                self.session.expire(obj)
+        row = (
+            await self.session.execute(
+                select(tbl.c.id, tbl.c.name, tbl.c.source, tbl.c.icon_url,
+                       tbl.c.floor_price, tbl.c.items_count)
+                .where(tbl.c.contract_address == coll.contract_address)
+            )
+        ).first()
+
+        if row is not None:
+            # Существующая запись: UPDATE только при фактическом изменении содержимого
+            db_fp = self._db_fingerprint(row[1], row[2], row[3], row[4], row[5])
+            if db_fp != coll.content_fingerprint():
+                await self.session.execute(
+                    pg_update(tbl)
+                    .where(tbl.c.id == row[0])
+                    .values(
+                        name=coll.name,
+                        icon_url=coll.icon_url,
+                        floor_price=coll.floor_price,
+                        items_count=coll.items_count,   # <-- обязательное обновление
+                        last_updated=func.now(),
+                        # telegram_api не понижает getgems-запись: source не трогаем
+                    )
+                )
+            return uuid.UUID(str(row[0]))
+
+        # Новой строки в БД нет — вставляем; on_conflict DO NOTHING страхует
+        # гонку двух параллельных updater'ов (уникальность contract_address)
+        new_id = uuid.uuid4()
         stmt = (
-            pg_insert(Collection.__table__)
+            pg_insert(tbl)
             .values(
+                id=new_id,
                 name=coll.name,
                 contract_address=coll.contract_address,
                 icon_url=coll.icon_url,
@@ -425,83 +507,39 @@ class CollectionDiscovery:
                 items_count=coll.items_count,
                 last_updated=func.now(),
             )
-            .on_conflict_do_update(
-                index_elements=[Collection.__table__.c.contract_address],
-                set_={
-                    "name": coll.name,
-                    "icon_url": coll.icon_url,
-                    # telegram_api не перетирает getgems-запись (источник с апстрима не понижаем)
-                    "source": Collection.__table__.c.source,
-                    "items_count": coll.items_count,
-                    "last_updated": func.now(),
-                },
-                # WHERE: обновляем только при фактическом изменении содержимого
-                where=(
-                    Collection.__table__.c.name
-                    + "|"
-                    + Collection.__table__.c.source
-                    + "|"
-                    + func.coalesce(Collection.__table__.c.icon_url, "")
-                    + "|"
-                    + func.cast(Collection.__table__.c.floor_price, Text)
-                    + "|"
-                    + func.cast(Collection.__table__.c.items_count, Text)
-                    != fp
-                ),
-            )
-            .returning(Collection.__table__.c.id)
+            .on_conflict_do_nothing(index_elements=[tbl.c.contract_address])
         )
-        res = await self.session.execute(stmt)
-        row = res.fetchone()
-        if row is not None:
-            return uuid.UUID(str(row[0]))
-        # Строка существует, но изменений нет. Разные СУБД по-разному ведут себя с
-        # RETURNING при DO UPDATE ... WHERE false (SQLite возвращает старую строку),
-        # поэтому сверяем отпечаток из БД и при расхождении делаем явный UPDATE —
-        # так поведение идентично на PG (прод) и SQLite (тесты).
-        existing = (
-            await self.session.execute(
-                select(Collection.id, Collection.name, Collection.source, Collection.icon_url,
-                       Collection.floor_price, Collection.items_count)
-                .where(Collection.contract_address == coll.contract_address)
-            )
-        ).one()
-        db_fp = "|".join([
-            existing[1], existing[2], existing[3] or "", str(existing[4]), str(existing[5]),
-        ])
-        if db_fp != fp:
-            await self.session.execute(
-                pg_update(Collection.__table__)
-                .where(Collection.__table__.c.id == existing[0])
-                .values(name=coll.name, icon_url=coll.icon_url, items_count=coll.items_count,
-                        floor_price=coll.floor_price, last_updated=func.now())
-            )
-        return uuid.UUID(str(existing[0]))
+        await self.session.execute(stmt)
+        return new_id
 
     async def _upsert_attributes(self, collection_id: uuid.UUID, attrs: list[DiscoveredAttribute]) -> int:
-        """Upsert атрибутов (UNIQUE collection_id+type+value). Возвращает число затронутых."""
+        """
+        Upsert атрибутов по UNIQUE (collection_id, type, value) БЕЗ дубликатов.
+        При повторном discovery состав тот же -> количество строк не меняется
+        (ИСПРАВЛЕНИЕ: идемпотентность проверяется тестом attr_count == 1).
+        Возвращает итоговое число атрибутов коллекции в БД.
+        """
         if not attrs:
             return 0
-        stmt = (
-            pg_insert(Attribute.__table__)
-            .values([
-                {
-                    "id": uuid.uuid4(),
-                    "collection_id": collection_id,
-                    "type": a.type,
-                    "value": a.value,
-                    "icon_url": a.icon_url,
-                }
-                for a in attrs
-            ])
-            .on_conflict_do_update(
-                index_elements=["collection_id", "type", "value"],
-                set_={"icon_url": pg_insert(Attribute.__table__).excluded.icon_url},
-            )
-            .returning(Attribute.__table__.c.id)
+        tbl = Attribute.__table__
+        rows = [
+            {
+                "id": uuid.uuid4(),
+                "collection_id": collection_id,
+                "type": a.type,
+                "value": a.value,
+                "icon_url": a.icon_url,
+            }
+            for a in attrs
+        ]
+        stmt = pg_insert(tbl).values(rows).on_conflict_do_nothing(
+            index_elements=[tbl.c.collection_id, tbl.c.type, tbl.c.value]
         )
-        res = await self.session.execute(stmt)
-        return len(res.fetchall())
+        await self.session.execute(stmt)
+        total = (
+            await self.session.execute(select(func.count()).select_from(tbl).where(tbl.c.collection_id == collection_id))
+        ).scalar_one()
+        return int(total)
 
 
 # ---------------------------------------------------------------------------

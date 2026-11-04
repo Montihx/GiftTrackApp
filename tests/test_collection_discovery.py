@@ -4,7 +4,8 @@
   1. fetch_telegram_gifts() — мок Bot API getAvailableGifts, маппинг Gift->Collection.
   2. Маппинг алиасов trait_type -> model/background/symbol/pattern (+ unmapped -> None).
   3. normalize_metadata_uri: https | ipfs:// | ipfs://ipfs/ через gateway.
-  4. Парсинг metadata JSON из https- и ipfs-источников (мок _get_bytes).
+  4. Парсинг metadata JSON из https- и ipfs-источников (мок aiohttp.ClientSession.get
+     на уровне КЛАССА — перехватываются оба URL: оригинальный и ipfs-шлюз).
   5. discover_all(): upsert идемпотентен — повторный запуск НЕ создаёт дубликаты,
      items_count обновляется.
 """
@@ -12,9 +13,12 @@ from __future__ import annotations
 
 import base64
 import uuid
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any
+from unittest.mock import patch
 
+import aiohttp
 import orjson
 import pytest
 from sqlalchemy import func, select
@@ -28,8 +32,6 @@ from services.collection_discovery import (
     decode_data_uri,
     normalize_metadata_uri,
 )
-
-pytestmark = pytest.mark.asyncio
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +168,7 @@ async def test_fetch_telegram_gifts_mapping(session: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Парсинг атрибутов NFT (мок blockchain + мок загрузки metadata: https и ipfs)
+# 4. Парсинг атрибутов NFT (мок blockchain + мок aiohttp.ClientSession на уровне КЛАССА)
 # ---------------------------------------------------------------------------
 class FakeCell:
     """Мини-заглушка pytoniq Cell/Slice для цепочки get_nft_data -> get_nft_content."""
@@ -202,6 +204,60 @@ class FakeBlockchain:
         raise AssertionError(f"неизвестный method_id {method_id:#x}")
 
 
+class FakeResponse:
+    """Заглушка ответа aiohttp (async context manager) с телом metadata JSON."""
+
+    def __init__(self, body: bytes, status: int = 200) -> None:
+        self._body = body
+        self.status = status
+
+    async def __aenter__(self) -> "FakeResponse":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> bool:
+        return False
+
+    async def read(self) -> bytes:
+        return self._body
+
+    async def text(self) -> str:
+        return self._body.decode()
+
+    def raise_for_status(self) -> None:
+        if self.status >= 400:
+            raise aiohttp.ClientResponseError(None, (), status=self.status)  # type: ignore[arg-type]
+
+
+def patch_aiohttp_session_get(body: bytes, fetched: list[str]):
+    """
+    Мок aiohttp.ClientSession.get/request НА УРОВНЕ КЛАССА — перехватываются ВСЕ
+    запросы модуля (и оригинальный https-URL, и ipfs:// через шлюз ipfs.io),
+    независимо от того, какой экземпляр сессии создан внутри fetch-обёртки.
+    Возвращает context manager с двумя патчами (get и request).
+    """
+
+    class _Ctx(FakeResponse):
+        pass
+
+    @asynccontextmanager
+    async def fake_request(self: Any, method: str, url: str, **kw: Any):
+        # фиксируем только GET-выгрузки metadata
+        if str(method).upper() == "GET":
+            fetched.append(url)
+        yield _Ctx(body)
+
+    async def fake_get(self: Any, url: str, **kw: Any):
+        fetched.append(url)
+        return _Ctx(body)
+
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(patch.object(aiohttp.ClientSession, "get", fake_get))
+    stack.enter_context(patch.object(aiohttp.ClientSession, "request", fake_request))
+    return stack
+
+
 async def test_parse_attributes_https_and_ipfs(session: Any) -> None:
     for uri, expected_url in (
         ("https://meta.example.com/teddy/0.json", "https://meta.example.com/teddy/0.json"),
@@ -211,18 +267,14 @@ async def test_parse_attributes_https_and_ipfs(session: Any) -> None:
         disc.blockchain = FakeBlockchain(uri)
 
         fetched: list[str] = []
+        with patch_aiohttp_session_get(orjson.dumps(METADATA_HTTPS), fetched):
+            coll = DiscoveredCollection(name="Teddy", contract_address="EQCollTest", source="getgems")
+            attrs = await disc.parse_collection_attributes(coll)
 
-        async def fake_get_bytes(self: CollectionDiscovery, url: str, context: str = "") -> bytes:
-            fetched.append(url)
-            return orjson.dumps(METADATA_HTTPS)
-
-        disc._get_bytes = fake_get_bytes.__get__(disc)  # type: ignore[method-assign]
-
-        coll = DiscoveredCollection(name="Teddy", contract_address="EQCollTest", source="getgems")
-        attrs = await disc.parse_collection_attributes(coll)
-
-        assert fetched == [expected_url], f"metadata должен качаться по {expected_url}"
-        # 3 NFT выборки -> уникальные трейты: 4 (Rarity отброшен)
+        # 3 NFT выборки -> ровно 3 скачивания по НОРМАЛИЗОВАННОМУ URL
+        assert len(fetched) == 3 and set(fetched) == {expected_url}, \
+            f"metadata должен качаться по {expected_url}, реально: {fetched}"
+        # уникальные трейты: 4 (Rarity отброшен как unmapped)
         got = {(a.type, a.value) for a in attrs}
         assert got == {
             ("model", "Brown Bear"),
