@@ -31,18 +31,44 @@ class TonState:
         return int(row[0]) if row else 0
 
     async def save_last_timestamp(self, timestamp: int, key: str | None = None) -> None:
-        """Сохранить последний обработанный timestamp для ключа (upsert)."""
-        state_key = key or self.STATE_KEY
-        stmt = select(ListenerState).where(ListenerState.key == state_key)
-        state = (await self.session.execute(stmt)).scalar_one_or_none()
+        """
+        Сохранить последний обработанный timestamp для ключа (upsert через Core).
 
-        if state is None:
-            self.session.add(ListenerState(key=state_key, last_index=timestamp))
+        Использует SQLAlchemy Core (не ORM) для надёжного upsert: если запись
+        существует — UPDATE, иначе INSERT. Это обходит проблему identity map,
+        когда ORM не видит объект и пытается вставить дубль.
+        """
+        from sqlalchemy import insert, update
+
+        state_key = key or self.STATE_KEY
+        tbl = ListenerState.__table__
+
+        # Проверяем существование через Core (быстрее ORM и не зависит от identity map)
+        stmt = select(tbl.c.key).where(tbl.c.key == state_key)
+        row = (await self.session.execute(stmt)).first()
+
+        if row is None:
+            # INSERT новой записи
+            insert_stmt = insert(tbl).values(
+                key=state_key,
+                last_index=timestamp,
+                updated_at=dt.datetime.now(dt.timezone.utc),
+            )
+            await self.session.execute(insert_stmt)
         else:
-            state.last_index = timestamp
-            state.updated_at = dt.datetime.now(dt.timezone.utc)
+            # UPDATE существующей записи
+            update_stmt = (
+                update(tbl)
+                .where(tbl.c.key == state_key)
+                .values(
+                    last_index=timestamp,
+                    updated_at=dt.datetime.now(dt.timezone.utc),
+                )
+            )
+            await self.session.execute(update_stmt)
 
         await self.session.flush()
+
 
 
         if state is None:
