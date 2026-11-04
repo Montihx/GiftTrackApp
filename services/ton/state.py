@@ -23,16 +23,27 @@ class TonState:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def load_last_timestamp(self) -> int:
-        """Загрузить последний обработанный timestamp (Unix timestamp в секундах)."""
-        stmt = select(ListenerState.last_index).where(ListenerState.key == self.STATE_KEY)
+    async def load_last_timestamp(self, key: str | None = None) -> int:
+        """Загрузить последний обработанный timestamp для ключа (по умолчанию общий)."""
+        state_key = key or self.STATE_KEY
+        stmt = select(ListenerState.last_index).where(ListenerState.key == state_key)
         row = (await self.session.execute(stmt)).first()
-        return row[0] if row else 0
+        return int(row[0]) if row else 0
 
-    async def save_last_timestamp(self, timestamp: int) -> None:
-        """Сохранить последний обработанный timestamp."""
-        stmt = select(ListenerState).where(ListenerState.key == self.STATE_KEY)
+    async def save_last_timestamp(self, timestamp: int, key: str | None = None) -> None:
+        """Сохранить последний обработанный timestamp для ключа (upsert)."""
+        state_key = key or self.STATE_KEY
+        stmt = select(ListenerState).where(ListenerState.key == state_key)
         state = (await self.session.execute(stmt)).scalar_one_or_none()
+
+        if state is None:
+            self.session.add(ListenerState(key=state_key, last_index=timestamp))
+        else:
+            state.last_index = timestamp
+            state.updated_at = dt.datetime.now(dt.timezone.utc)
+
+        await self.session.flush()
+
 
         if state is None:
             new_state = ListenerState(key=self.STATE_KEY, last_index=timestamp)
@@ -47,41 +58,31 @@ class TonState:
         """
         Вставить или обновить NFT в processed_nfts.
 
-        SQLite-совместимо: metadata_json сериализуем в строку если SQLite,
-        иначе оставляем dict (PostgreSQL asyncpg сам сериализует).
+        metadata_json передаётся dict как есть: колонка JSONB имеет
+        bind/result-процессоры SQLAlchemy на обоих диалектах (PG и SQLite),
+        сериализация/десериализация выполняются автоматически.
         """
-        # Определяем диалект БД
-        bind = self.session.get_bind()
-        is_sqlite = bind.dialect.name == "sqlite"
-
-        # Подготавливаем metadata_json
-        if metadata:
-            metadata_json = orjson.dumps(metadata).decode() if is_sqlite else metadata
-        else:
-            metadata_json = None
-
-        # Проверяем существование
         stmt = select(ProcessedNft).where(ProcessedNft.nft_address == event.nft_address)
         nft = (await self.session.execute(stmt)).scalar_one_or_none()
 
         if nft is None:
-            # Новый NFT
-            new_nft = ProcessedNft(
-                nft_address=event.nft_address,
-                nft_index=event.index,
-                current_owner_ton=event.owner_ton,
-                metadata_json=metadata_json,
+            self.session.add(
+                ProcessedNft(
+                    nft_address=event.nft_address,
+                    nft_index=event.index,
+                    current_owner_ton=event.owner_ton,
+                    metadata_json=metadata,
+                )
             )
-            self.session.add(new_nft)
             logger.debug(f"Mint: создан NFT {event.nft_address} (index={event.index})")
         else:
-            # Обновляем владельца и метаданные
             nft.current_owner_ton = event.owner_ton
-            if metadata_json is not None:
-                nft.metadata_json = metadata_json
+            if metadata is not None:
+                nft.metadata_json = metadata
             logger.debug(f"Mint: обновлён NFT {event.nft_address}")
 
         await self.session.flush()
+
 
     async def record_transfer(self, event: TransferEvent) -> None:
         """
