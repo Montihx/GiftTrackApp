@@ -1,18 +1,1 @@
-# /workspace/.gitignore
-__pycache__/
-*.py[cod]
-.env
-*.session
-*.session-journal
-.venv/
-venv/
-dist/
-build/
-*.egg-info/
-node_modules/
-frontend/dist/
-.pytest_cache/
-.mypy_cache/
-ruff.toml
-pgdata/
-redisdata/
+*.tar.gz
