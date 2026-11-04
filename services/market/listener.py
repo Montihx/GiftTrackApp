@@ -128,21 +128,40 @@ class MarketListener:
     ) -> None:
         """Обработка одной коллекции: получение листингов, парсинг, публикация."""
         cache_key = self.CACHE_LAST_LISTING_KEY.format(collection=collection_id)
-        last_seen = await cache_get_json(self.redis, cache_key)
-        if last_seen is None:
-            last_seen = ""
+        last_seen_raw = await cache_get_json(self.redis, cache_key)
+
+        # Парсим last_seen в datetime (None → эпоха UTC)
+        if last_seen_raw:
+            try:
+                last_seen_dt = dt.datetime.fromisoformat(
+                    last_seen_raw.replace("Z", "+00:00")
+                )
+            except ValueError:
+                last_seen_dt = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+        else:
+            last_seen_dt = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
 
         listings = await self._fetch_listings(contract_addr, limit=50)
         if not listings:
             self.stats["empty"] += 1
             return
 
-        new_listings = [l for l in listings if l["createdAt"] > last_seen]
+        # Сравниваем datetime-объекты, не строки
+        new_listings = []
+        for l in listings:
+            created_raw = l.get("createdAt") or ""
+            try:
+                created_dt = dt.datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+                if created_dt > last_seen_dt:
+                    new_listings.append(l)
+            except ValueError:
+                continue
+
         if not new_listings:
             self.stats["empty"] += 1
             return
 
-        max_created = last_seen
+        max_dt = last_seen_dt
         for listing in new_listings:
             event = self._parse_listing(listing, contract_addr)
             if event is None:
@@ -152,11 +171,15 @@ class MarketListener:
             payload["collection_id"] = collection_id
             await stream_publish(self.redis, STREAM_NFT_LISTINGS, payload)
 
-            max_created = max(max_created, listing["createdAt"])
+            if event.listed_at > max_dt:
+                max_dt = event.listed_at
             self.stats["listings"] += 1
 
-        await cache_set_json(self.redis, cache_key, max_created, ttl=86400)
+        # Сохраняем max_created в ISO-формате с Z-суффиксом
+        max_created_str = max_dt.isoformat().replace("+00:00", "Z")
+        await cache_set_json(self.redis, cache_key, max_created_str, ttl=86400)
         logger.info(f"[{collection_name}] новых листингов: {len(new_listings)}")
+
 
     def _parse_listing(self, node: dict[str, Any], contract_addr: str) -> ListingEvent | None:
         """Парсинг GraphQL-ноды листинга в ListingEvent."""
