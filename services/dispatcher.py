@@ -130,6 +130,7 @@ class NotificationDispatcher:
             lines.append(f"Фон: {metadata['background']}")
         if metadata.get("pattern"):
             lines.append(f"Узор: {metadata['pattern']}")
+        lines.extend(await self._rarity_and_supply_lines(collection_id, metadata))
         lines.append("")
         lines.append(f"👤 Владелец: {owner_link}")
         lines.append(f"🔗 <a href='https://getgems.io/nft/{nft_address}'>GetGems</a>")
@@ -190,8 +191,10 @@ class NotificationDispatcher:
             lines.append(f"Фон: {attributes['background']}")
         if attributes.get("pattern"):
             lines.append(f"Узор: {attributes['pattern']}")
+        lines.extend(await self._rarity_and_supply_lines(collection_id, attributes))
         lines.append("")
         lines.append(f"👤 Продавец: {owner_link}")
+
 
         if owner_history:
             lines.append("")
@@ -205,6 +208,13 @@ class NotificationDispatcher:
             lines.append(f"Флор гифта: <b>{floor_coll} TON</b>")
         if floor_model is not None:
             lines.append(f"Флор модели: <b>{floor_model} TON</b>")
+        
+        if recent_sales:
+            prices = [float(s.get("price", 0)) for s in recent_sales if s.get("price")]
+            if prices:
+                prices.sort()
+                median = prices[len(prices) // 2]
+                lines.append(f"💎 Ценность: <b>~{median} TON</b> (медиана продаж)")
 
         if recent_sales:
             lines.append("")
@@ -307,6 +317,51 @@ class NotificationDispatcher:
                 ]
             )
         return None
+
+    async def _rarity_and_supply_lines(
+        self, collection_id: Any, attributes: dict[str, Any]
+    ) -> list[str]:
+        """
+        Строки редкости и наличия для уведомления.
+
+        Редкость = attr.items_count / collection.items_count * 100 (приближённо,
+        по выборке rarity_sample_size). Наличие = collections.items_count (on-chain).
+        """
+        if collection_id is None:
+            return []
+
+        from db.models import Collection
+
+        coll = (
+            await self.session.execute(
+                select(Collection.items_count).where(Collection.id == collection_id)
+            )
+        ).scalar_one_or_none()
+        if not coll:
+            return []
+
+        lines = [f"📦 Выпущено: <b>{coll:,}</b> NFT".replace(",", " ")]
+
+        for attr_type in ("model", "background", "pattern"):
+            value = attributes.get(attr_type)
+            if not value:
+                continue
+            attr = (
+                await self.session.execute(
+                    select(Attribute.items_count).where(
+                        Attribute.collection_id == collection_id,
+                        Attribute.type == attr_type,
+                        Attribute.value == value,
+                    )
+                )
+            ).scalar_one_or_none()
+            if attr:
+                pct = round(attr / coll * 100, 2) if coll else 0
+                label = {"model": "Модель", "background": "Фон", "pattern": "Узор"}[attr_type]
+                lines.append(f"🎲 {label} {value}: <b>{pct}%</b>")
+
+        return lines
+
 
     async def run_loop(self, stop_event: asyncio.Event) -> None:
         """Основной цикл: читает Redis Streams и обрабатывает события."""
