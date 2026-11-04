@@ -277,3 +277,48 @@ async def test_listener_process_collection(session):
     # Проверяем что transfer обработан
     assert listener.stats["transfers"] == 1
     assert redis_mock.xadd.called  # Опубликовали в Stream
+@pytest.mark.asyncio
+async def test_listener_dedupe_no_repeat_processing(session):
+    """Регрессия: повторный поллинг тех же транзакций не создаёт дублей и спама."""
+    from sqlalchemy import select
+
+    from db.models import Collection, NftOwnershipHistory
+    from services.ton.listener import TonListener
+
+    coll = Collection(name="Dedupe Coll", contract_address="EQdedupe", source="getgems")
+    session.add(coll)
+    await session.commit()
+
+    tx = {
+        "hash": "tx_dup",
+        "time": 1699999999,
+        "in_msg": {
+            "source": "EQold",
+            "destination": "EQnft_dup",
+            "op": 1607361556,
+            "decoded_body": {"type": "nft_transfer", "new_owner": "EQnew"},
+        },
+    }
+
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+    redis_mock.set = AsyncMock()
+    redis_mock.xadd = AsyncMock(return_value=b"1-0")
+
+    listener = TonListener(session=session, redis=redis_mock)
+    listener._fetch_transactions = AsyncMock(return_value=[tx])
+
+    # Первый цикл: событие обработано
+    await listener._process_collection(str(coll.id), "Dedupe Coll", "EQdedupe")
+    assert listener.stats["transfers"] == 1
+    assert redis_mock.xadd.call_count == 1
+
+    # Второй цикл с теми же транзакциями: ничего не обрабатывается повторно
+    await listener._process_collection(str(coll.id), "Dedupe Coll", "EQdedupe")
+    assert listener.stats["transfers"] == 1
+    assert redis_mock.xadd.call_count == 1  # нет спама в Stream
+
+    # В истории владения ровно одна запись
+    stmt = select(NftOwnershipHistory).where(NftOwnershipHistory.nft_address == "EQnft_dup")
+    history = (await session.execute(stmt)).scalars().all()
+    assert len(history) == 1
