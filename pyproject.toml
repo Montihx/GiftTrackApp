@@ -23,7 +23,6 @@ dependencies = [
     "tenacity>=8.5",                 # Ретраи с exponential backoff
     # --- TON ---
     "pytoniq-core>=0.1.31",          # Адреса TON, cell, parse
-    "pytoniq-liteclient>=0.1.16",    # LiteServer WebSocket-клиент (subscribe_blocks)
     # --- Telegram userbot (cold path resolver) ---
     "telethon>=1.36",
     # --- Прочее ---
