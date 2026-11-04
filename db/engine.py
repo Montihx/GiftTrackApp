@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -39,20 +41,17 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
+@asynccontextmanager
 async def session_scope() -> AsyncIterator[AsyncSession]:
-    """
-    Зависимость для FastAPI и контекст-менеджер для сервисов:
-        async with session_scope() as s: ...
-    Автоматический commit при успехе / rollback при исключении.
-    """
-    factory = get_session_factory()
-    async with factory() as session:
+    """Контекст-менеджер/зависимость FastAPI: commit при успехе, rollback при ошибке."""
+    async with get_session_factory()() as session:
         try:
             yield session
             await session.commit()
         except Exception:
             await session.rollback()
             raise
+
 
 
 async def dispose_engine() -> None:
