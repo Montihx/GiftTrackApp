@@ -51,7 +51,7 @@ services:
 
   listener-ton:
     build: .
-    command: python -m services.ton_listener
+    command: python -m bot.listener_main
     env_file: .env
     restart: unless-stopped
     depends_on:
