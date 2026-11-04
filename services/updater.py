@@ -120,6 +120,15 @@ query RecentSales($address: Address!, $model: String!, $limit: Int!) {
 }
 """
 
+GQL_COLLECTION_ITEMS = """
+query CollectionItems($address: Address!, $limit: Int!) {
+  nftItems(input: { collectionAddress: $address, limit: $limit }) {
+    edges { node { metadata { attributes { name value } } } }
+  }
+}
+"""
+
+
 SALES_CACHE_LIMIT = 10  # сколько последних продаж держим в Redis
 
 
@@ -339,6 +348,61 @@ class FloorAndSalesUpdater:
         stats = await self._discovery.discover_all()
         logger.info(f"update_collection_meta: {stats}")
 
+    async def update_attribute_counts(self) -> None:
+        """
+        Пересчёт items_count атрибутов (для процентов редкости).
+
+        Берём выборку rarity_sample_size NFT коллекции, считаем вхождения
+        каждого трейта и пишем в attributes.items_count.
+        Процент редкости = attr.items_count / collection.items_count * 100.
+        """
+        from collections import Counter
+
+        from core.config import map_trait_type
+
+        rows = (
+            await self.session.execute(
+                select(Collection.id, Collection.name, Collection.contract_address).where(
+                    ~Collection.contract_address.startswith("tg_gift:")
+                )
+            )
+        ).all()
+
+        for coll_uuid, coll_name, contract in rows:
+            try:
+                data = await self._graphql(
+                    GQL_COLLECTION_ITEMS,
+                    {"address": contract, "limit": self.settings.rarity_sample_size},
+                    context=f"counts[{coll_name}]",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"update_attribute_counts: '{coll_name}': {exc!r}")
+                continue
+
+            edges = ((data.get("nftItems") or {}).get("edges")) or []
+            counter: Counter[tuple[str, str]] = Counter()
+            for e in edges:
+                node = e.get("node") or {}
+                for attr in ((node.get("metadata") or {}).get("attributes")) or []:
+                    attr_type = map_trait_type(attr.get("name") or "")
+                    if attr_type:
+                        counter[(attr_type, attr.get("value") or "")] += 1
+
+            if not counter:
+                continue
+
+            attrs = (
+                await self.session.execute(
+                    select(Attribute).where(Attribute.collection_id == coll_uuid)
+                )
+            ).scalars().all()
+            for a in attrs:
+                a.items_count = counter.get((a.type, a.value), 0)
+
+        await self.session.commit()
+        logger.info(f"update_attribute_counts: коллекций: {len(rows)}")
+
+
     # ------------------------------------------------------------------
     # GraphQL-хелпер (подменяется в тестах)
     # ------------------------------------------------------------------
@@ -388,6 +452,7 @@ class FloorAndSalesUpdater:
             _loop("floors", self.update_floors, s.floor_update_interval),
             _loop("sales", self.update_recent_sales, s.sales_update_interval),
             _loop("meta", self.update_collection_meta, s.discovery_interval),
+            _loop("counts", self.update_attribute_counts, s.counts_update_interval),
         )
 
 
