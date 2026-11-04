@@ -69,17 +69,6 @@ class TonState:
 
         await self.session.flush()
 
-
-
-        if state is None:
-            new_state = ListenerState(key=self.STATE_KEY, last_index=timestamp)
-            self.session.add(new_state)
-        else:
-            state.last_index = timestamp
-            state.updated_at = dt.datetime.now(dt.timezone.utc)
-
-        await self.session.flush()
-
     async def upsert_mint(self, event: MintEvent, metadata: dict[str, Any] | None = None) -> None:
         """
         Вставить или обновить NFT в processed_nfts.
