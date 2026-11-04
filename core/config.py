@@ -15,9 +15,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- TON Listener (ЭТАП 3) ---
-    ton_poll_interval: float = Field(
-    default=3.0, description="Интервал поллинга Tonviewer API в секундах")
+    
     # --- Окружение ---
     environment: str = Field(default="development")
     log_level: str = Field(default="INFO")
@@ -71,6 +69,11 @@ class Settings(BaseSettings):
         default=100, description="Сколько NFT коллекции опрашивать для извлечения атрибутов"
     )
     ipfs_gateway: str = Field(default="https://ipfs.io/ipfs/")
+
+    # --- TON Listener (ЭТАП 3) ---
+    ton_poll_interval: float = Field(
+        default=3.0, description="Интервал поллинга Tonviewer API в секундах"
+    )
 
     def twa_secret_key(self) -> bytes:
         """
