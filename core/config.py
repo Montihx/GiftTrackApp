@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     ton_poll_interval: float = Field(
         default=3.0, description="Интервал поллинга Tonviewer API в секундах"
     )
+    # --- Market Listener (ЭТАП 4) ---
+    market_poll_interval: float = Field(
+        default=5.0, description="Интервал поллинга маркетплейсов в секундах"
+    )
+
+    
 
     def twa_secret_key(self) -> bytes:
         """
