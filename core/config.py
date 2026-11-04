@@ -15,6 +15,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # --- TON Listener (ЭТАП 3) ---
+    ton_poll_interval: float = Field(
+    default=3.0, description="Интервал поллинга Tonviewer API в секундах")
     # --- Окружение ---
     environment: str = Field(default="development")
     log_level: str = Field(default="INFO")
