@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     )
 
 
+
     def twa_secret_key(self) -> bytes:
         """
         Ключ для валидации initData Telegram Web App.
