@@ -1,0 +1,51 @@
+# /workspace/pyproject.toml — зависимости проекта Gift Track Bot
+[project]
+name = "gifttrack"
+version = "0.1.0"
+description = "Gift Track Bot — мониторинг апгрейдов и листингов Telegram-подарков на TON"
+requires-python = ">=3.11"
+dependencies = [
+    # --- Backend core ---
+    "fastapi>=0.115",                # HTTP API для TWA
+    "uvicorn[standard]>=0.30",       # ASGI-сервер
+    "aiogram>=3.13",                 # Telegram-бот (Bot API)
+    "pydantic>=2.8",                 # Модели данных / валидация
+    "pydantic-settings>=2.4",        # Конфиг через .env
+    "loguru>=0.7",                   # Логирование
+    # --- База данных ---
+    "sqlalchemy[asyncio]>=2.0",      # ORM 2.0 (async)
+    "asyncpg>=0.29",                 # Асинхронный драйвер PostgreSQL
+    "alembic>=1.13",                 # Миграции БД
+    # --- Redis ---
+    "redis>=5.0",                    # redis.asyncio: кэш + Streams
+    # --- HTTP / WS ---
+    "aiohttp>=3.9",                  # GraphQL/REST/WebSocket клиенты
+    "tenacity>=8.5",                 # Ретраи с exponential backoff
+    # --- TON ---
+    "pytoniq-core>=0.1.31",          # Адреса TON, cell, parse
+    "pytoniq-liteclient>=0.1.16",    # LiteServer WebSocket-клиент (subscribe_blocks)
+    # --- Telegram userbot (cold path resolver) ---
+    "telethon>=1.36",
+    # --- Прочее ---
+    "PyJWT>=2.9",                    # (не используется напрямую, HMAC через hashlib)
+    "python-multipart>=0.0.9",
+    "orjson>=3.10",                  # Быстрый JSON для Redis/SSE
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "aiosqlite>=0.20",               # In-memory БД для тестов моделей
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["core", "db", "bot", "api", "services"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
