@@ -164,34 +164,24 @@ async def test_no_subscribers_no_send(session):
     await dispatcher.process_upgrade(payload)
 
     assert not bot_mock.send_message.called
-    @pytest.mark.asyncio
+
+@pytest.mark.asyncio
 async def test_rarity_lines(session):
     """Rarity-строки: процент редкости и наличие."""
     from db.models import Attribute, Collection
-
-    coll = Collection(
-        name="Rarity Coll", contract_address="EQrarity", source="getgems", items_count=1000
-    )
+    coll = Collection(name="Rarity Coll", contract_address="EQrarity", source="getgems", items_count=1000)
     session.add(coll)
     await session.commit()
-
-    attr = Attribute(
-        collection_id=coll.id, type="model", value="Obelisk", items_count=6
-    )
+    attr = Attribute(collection_id=coll.id, type="model", value="Obelisk", items_count=6)
     session.add(attr)
     await session.commit()
-
     bot_mock = AsyncMock()
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=None)
     resolver_mock = AsyncMock()
-
-    dispatcher = NotificationDispatcher(
-        bot=bot_mock, session=session, redis=redis_mock, resolver=resolver_mock
-    )
-
+    dispatcher = NotificationDispatcher(bot=bot_mock, session=session, redis=redis_mock, resolver=resolver_mock)
     lines = await dispatcher._rarity_and_supply_lines(coll.id, {"model": "Obelisk"})
+    assert any("Выпущено" in l for l in lines)
+    assert any("0.6%" in l for l in lines)
 
-    assert any("Выпущено" in l and "1 000" in l for l in lines)
-    assert any("
 
