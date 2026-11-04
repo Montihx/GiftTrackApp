@@ -103,22 +103,12 @@ class TonListener:
             except Exception as exc:  # noqa: BLE001
                 logger.error(f"Ошибка обработки коллекции {coll_name}: {exc!r}")
                 self.stats["errors"] += 1
-
-        async def _process_collection(
+    async def _process_collection(
         self, collection_id: str, collection_name: str, contract_addr: str
     ) -> None:
-        """
-        Обработка одной коллекции: получение транзакций, отсечение обработанных,
-        парсинг, сохранение, публикация в Stream.
-
-        Dedupe: обрабатываются только транзакции с time > last_ts.
-        last_ts хранится в Redis (быстрый путь) и дублируется в listener_state
-        (переживает сброс Redis).
-        """
         state_key = f"{TonState.STATE_KEY}:{collection_id}"
         cache_key = self.CACHE_LAST_TS_KEY.format(collection=collection_id)
 
-        # Быстрый путь: Redis; холодный старт: listener_state в БД
         last_ts = await cache_get_json(self.redis, cache_key)
         if last_ts is None:
             last_ts = await self.state.load_last_timestamp(state_key)
@@ -129,7 +119,6 @@ class TonListener:
             self.stats["empty"] += 1
             return
 
-        # Отсекаем уже обработанные транзакции (защита от дублей и спама)
         fresh = [tx for tx in transactions if int(tx.get("time", 0)) > last_ts]
         if not fresh:
             self.stats["empty"] += 1
@@ -151,7 +140,6 @@ class TonListener:
             max_ts = max(max_ts, int(transfer.timestamp.timestamp()))
             self.stats["transfers"] += 1
 
-        # Сохраняем прогресс: Redis (быстро) + listener_state (надёжно)
         await cache_set_json(self.redis, cache_key, max_ts, ttl=86400)
         await self.state.save_last_timestamp(max_ts, state_key)
         await self.session.commit()
