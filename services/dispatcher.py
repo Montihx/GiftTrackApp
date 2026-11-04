@@ -40,6 +40,7 @@ import datetime as dt
 from typing import Any
 
 import orjson
+import uuid
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from loguru import logger
@@ -105,7 +106,15 @@ class NotificationDispatcher:
         nft_address = payload.get("nft_address", "")
         owner_ton = payload.get("owner_ton", "")
         metadata = payload.get("metadata") or {}
-        collection_id = payload.get("collection_id")
+        collection_id_raw = payload.get("collection_id")
+
+        # Конвертируем collection_id из str в uuid.UUID
+        collection_id = None
+        if collection_id_raw:
+            try:
+                collection_id = uuid.UUID(str(collection_id_raw))
+            except (ValueError, AttributeError):
+                pass
 
         # Резолвим владельца
         owner = await self.resolver.resolve(owner_ton) if owner_ton else {}
@@ -131,30 +140,39 @@ class NotificationDispatcher:
         await self._send_to_subscribers(collection_id, metadata, text, keyboard)
         self.stats["upgrades"] += 1
 
+
     async def process_listing(self, payload: dict[str, Any]) -> None:
         """Обработка события листинга."""
         nft_address = payload.get("nft_address", "")
         seller_ton = payload.get("seller_ton", "")
         attributes = payload.get("attributes") or {}
-        collection_id = payload.get("collection_id")
+        collection_id_raw = payload.get("collection_id")
         price = payload.get("price_ton", 0.0)
         marketplace = payload.get("marketplace", "getgems")
+
+        # Конвертируем collection_id из str в uuid.UUID
+        collection_id = None
+        if collection_id_raw:
+            try:
+                collection_id = uuid.UUID(str(collection_id_raw))
+            except (ValueError, AttributeError):
+                pass
 
         # Резолвим продавца
         owner = await self.resolver.resolve(seller_ton) if seller_ton else {}
         owner_link = self._owner_link(owner, seller_ton)
 
         # Собираем аналитику из Redis
-        floor_coll = await cache_get_json(self.redis, floor_key(collection_id or ""))
+        floor_coll = await cache_get_json(self.redis, floor_key(str(collection_id) if collection_id else ""))
         model_value = attributes.get("model")
         floor_model = (
-            await cache_get_json(self.redis, floor_key(collection_id or "", model_value))
-            if model_value
+            await cache_get_json(self.redis, floor_key(str(collection_id) if collection_id else "", model_value))
+            if model_value and collection_id
             else None
         )
         recent_sales = (
-            await cache_get_json(self.redis, recent_sales_key(collection_id or "", model_value))
-            if model_value
+            await cache_get_json(self.redis, recent_sales_key(str(collection_id) if collection_id else "", model_value))
+            if model_value and collection_id
             else None
         )
         owner_history = await cache_get_json(self.redis, owner_history_key(nft_address))
@@ -209,6 +227,7 @@ class NotificationDispatcher:
 
         await self._send_to_subscribers(collection_id, attributes, text, keyboard)
         self.stats["listings"] += 1
+
 
     async def _send_to_subscribers(
         self,
