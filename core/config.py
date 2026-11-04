@@ -46,6 +46,28 @@ class Settings(BaseSettings):
     getgems_ws_url: str = Field(default="wss://api.getgems.io/graphql")
     getgems_api_url: str = Field(default="https://api.getgems.io/graphql")
     tonviewer_api_key: str = Field(default="")
+    telegram_api_base: str = Field(
+        default="https://api.telegram.org", description="База Bot API (для тестов можно подменить)"
+    )
+
+    # --- Rate limiting внешних API (ЭТАП 2) ---
+    api_max_concurrency: int = Field(
+        default=5, description="Сколько параллельных запросов к внешним HTTP/GraphQL API"
+    )
+
+    # --- Периоды фоновых задач updater (сек) ---
+    floor_update_interval: float = Field(default=10.0)
+    sales_update_interval: float = Field(default=30.0)
+    discovery_interval: float = Field(default=3600.0)
+    floor_cache_ttl: int = Field(default=30)
+    sales_cache_ttl: int = Field(default=30)
+    attrs_cache_ttl: int = Field(default=3600)
+
+    # --- Collection Discovery ---
+    attributes_sample_size: int = Field(
+        default=100, description="Сколько NFT коллекции опрашивать для извлечения атрибутов"
+    )
+    ipfs_gateway: str = Field(default="https://ipfs.io/ipfs/")
 
     def twa_secret_key(self) -> bytes:
         """
@@ -59,6 +81,34 @@ class Settings(BaseSettings):
         if self.twa_auth_secret:
             return self.twa_auth_secret.encode()
         return hmac.new(b"WebAppData", self.bot_token.encode(), hashlib.sha256).digest()
+
+
+# ---------------------------------------------------------------------------
+# Маппинг trait_type из метаданных NFT -> тип атрибута в БД (ЭТАП 2, ТЗ п.1.C)
+# Ключи — канонические типы collections.attributes.type; значения — алиасы
+# (в нижнем регистре), встречающиеся в метаданных Telegram-подарков.
+# ---------------------------------------------------------------------------
+TRAIT_ALIASES: dict[str, list[str]] = {
+    "model": ["model", "character"],
+    "background": ["background", "bg"],
+    "symbol": ["symbol", "icon"],
+    "pattern": ["pattern", "decoration"],
+}
+
+
+def map_trait_type(trait_type: str) -> str | None:
+    """
+    Нормализация trait_type -> канонический тип атрибута.
+
+        map_trait_type("Character")  -> "model"
+        map_trait_type("Bg")          -> "background"
+        map_trait_type("Rarity")      -> None  (не маппится — игнорируем)
+    """
+    normalized = trait_type.strip().lower()
+    for attr_type, aliases in TRAIT_ALIASES.items():
+        if normalized in aliases:
+            return attr_type
+    return None
 
 
 @lru_cache
