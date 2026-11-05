@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 # Чтобы pydantic-settings не падал без .env
 os.environ.setdefault("DB_URL", "postgresql+asyncpg://gt:pass@localhost/gifttrack")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("CRYPTOBOT_WEBHOOK_SECRET", "testsecret")
 
 from db.models import Base  # noqa: E402
 
