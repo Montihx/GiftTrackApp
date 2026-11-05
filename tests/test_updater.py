@@ -239,3 +239,40 @@ async def test_parallel_jobs_share_session_without_errors(session: Any) -> None:
         up.update_floors(), up.update_recent_sales(), up.update_attribute_counts(),
         up.update_floors(), up.update_recent_sales(),
     )
+
+
+# ---------------------------------------------------------------------------
+# 5. FloorSnapshot: пишется только при изменении floor; Sale — из GetGems-продаж
+# ---------------------------------------------------------------------------
+async def test_floor_snapshot_only_on_change(session: Any) -> None:
+    from db.models import FloorSnapshot
+
+    await seed_collection(session)
+    r = FakeRedis()
+    up = make_updater(session, r, {
+        "floor[": {"nftCollectionFloorPrice": {"amount": {"value": "5.5"}}},
+        "model_floor[": {"nftItems": {"edges": []}},
+    })
+    await up.update_floors()
+    await up.update_floors()  # тот же floor -> без нового снапшота
+    snaps = (await session.execute(select(FloorSnapshot))).scalars().all()
+    assert len(snaps) == 1 and snaps[0].price == Decimal("5.5")
+
+    up2 = make_updater(session, r, {
+        "floor[": {"nftCollectionFloorPrice": {"amount": {"value": "6.0"}}},
+        "model_floor[": {"nftItems": {"edges": []}},
+    })
+    await up2.update_floors()
+    snaps = (await session.execute(select(FloorSnapshot))).scalars().all()
+    assert sorted(s.price for s in snaps) == [Decimal("5.5"), Decimal("6.0")]
+
+
+async def test_seed_catalog_called_without_crash(session: Any) -> None:
+    from db.models import Collection
+
+    up = make_updater(session, FakeRedis(), {})
+    stats = await up.seed_catalog()
+    assert stats["created"] >= 20
+    rows = (await session.execute(select(Collection))).scalars().all()
+    assert all(c.floor_price is None for c in rows)
+    await up.update_floors()  # только tg_gift:-плейсхолдеры -> цикл пропускается, без краша
