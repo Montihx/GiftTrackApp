@@ -11,3 +11,16 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python -m compileall -q core db services bot tests
       - run: python -m pytest tests/ -q
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+      - run: npm run build
+
