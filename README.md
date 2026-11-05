@@ -67,8 +67,8 @@ docker compose logs -f bot
 
 ### HTTPS и автопродление сертификата
 
-Боевой хост: `gifttrack.204.216.108.27.sslip.io`. Сертификат Let's Encrypt лежит
-в `/etc/letsencrypt/live/gifttrack.204.216.108.27.sslip.io/` и монтируется в nginx
+Боевой хост: `gifttrack.155.248.234.68.sslip.io`. Сертификат Let's Encrypt лежит
+в `/etc/letsencrypt/live/gifttrack.155.248.234.68.sslip.io/` и монтируется в nginx
 только на чтение; `nginx.conf` уже содержит редирект 80 → 443 и TLS-блок. Порт 3000
 хоста не используется (фронтенд слушает `127.0.0.1:3001`). Для другого домена
 замените имя в `nginx.conf` и выпустите сертификат через certbot.
