@@ -1,0 +1,5 @@
+api
+bot
+core
+db
+services

@@ -43,8 +43,8 @@ dev = [
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["core", "db", "bot", "api", "services"]
+[tool.setuptools.packages.find]
+include = ["core*", "db*", "bot*", "api*", "services*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

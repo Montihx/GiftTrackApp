@@ -1,4 +1,4 @@
-# /workspace/Dockerfile — единый образ для всех python-сервисов
+# Единый образ для всех python-сервисов
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -7,14 +7,17 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Сначала манифест зависимостей — для кэширования слоёв
+# Сначала зависимости (кэш слоёв), код копируется после
 COPY pyproject.toml README.md ./
-RUN pip install --upgrade pip && pip install -e . || pip install .
+RUN python - <<'PY'
+import tomllib, subprocess, sys
+deps = tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]
+subprocess.check_call([sys.executable, "-m", "pip", "install", *deps])
+PY
 
 COPY . .
 
-# Непривилегированный пользователь
 RUN useradd -m app && chown -R app:app /app
 USER app
 
-CMD ["python", "-m", "bot.main"]
+CMD ["python", "-m", "bot.bot_main"]

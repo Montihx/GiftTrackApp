@@ -28,7 +28,8 @@ async def _telethon_worker(redis, stop_event: asyncio.Event) -> None:
     """
     settings = get_settings()
     if not (settings.api_id and settings.api_hash and settings.phone):
-        logger.warning("Telethon не настроен (API_ID/API_HASH/PHONE пусты) — worker не запущен")
+        logger.warning("Telethon не настроен (API_ID/API_HASH/PHONE пусты) — worker простаивает")
+        await stop_event.wait()  # не завершаемся, чтобы контейнер не уходил в crash-loop
         return
 
     from telethon import TelegramClient
