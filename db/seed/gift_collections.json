@@ -1,0 +1,110 @@
+{
+  "_comment": "Seed-каталог коллекций Telegram Gifts. contract_address=null -> запись создаётся с плейсхолдером tg_gift:<slug> (floors не считаются, показывается «—»). Чтобы включить цены, впишите проверенный адрес коллекции (EQ…) — upsert сам заменит плейсхолдер. Адреса НЕ угадывайте: сверяйте минимум по двум источникам.",
+  "collections": [
+    {
+      "name": "Plush Pepe",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Durov's Cap",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Precious Peach",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Heart Locket",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Diamond Ring",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Crystal Ball",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Perfume Bottle",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Homemade Cake",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Signet Ring",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Eternal Rose",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Vintage Cigar",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Santa Hat",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Berry Box",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Magic Potion",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Sharp Tongue",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Trapped Heart",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Kissed Frog",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Hex Pot",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Spy Agaric",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Swiss Watch",
+      "contract_address": null,
+      "icon_url": null
+    },
+    {
+      "name": "Toy Bear",
+      "contract_address": null,
+      "icon_url": null
+    }
+  ]
+}
