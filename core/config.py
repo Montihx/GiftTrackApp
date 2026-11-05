@@ -87,6 +87,14 @@ class Settings(BaseSettings):
         default=500, description="Сколько NFT брать для подсчёта редкости"
     )
 
+    # --- Payments (ЭТАП 8) ---
+    subscription_price_ton: float = Field(default=10.0, description="Цена подписки в TON")
+    subscription_days: int = Field(default=30, description="Длительность подписки в днях")
+    admin_tg_ids: str = Field(default="", description="TG ID админов через запятую")
+
+    def is_admin(self, tg_id: int) -> bool:
+        """Проверка, является ли пользователь админом."""
+        return str(tg_id) in [x.strip() for x in self.admin_tg_ids.split(",") if x.strip()]
 
 
     def twa_secret_key(self) -> bytes:
