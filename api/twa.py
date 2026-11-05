@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any
+
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,6 +31,10 @@ from db.engine import session_scope
 from db.models import Attribute, Collection, Filter
 
 router = APIRouter(prefix="/api", tags=["twa"])
+async def get_session() -> AsyncIterator[AsyncSession]:
+    """FastAPI-зависимость: сессия БД (commit/rollback через session_scope)."""
+    async with session_scope() as session:
+        yield session
 
 
 class FilterCreate(BaseModel):
@@ -107,72 +113,74 @@ async def get_collections() -> dict[str, Any]:
     finally:
         await redis.aclose()
 
-
 @router.get("/filters")
-async def get_filters(init_data: dict = Depends(get_current_user_init_data)) -> dict[str, Any]:
+async def get_filters(
+    session: AsyncSession = Depends(get_session),
+    init_data: dict = Depends(get_current_user_init_data),
+) -> dict[str, Any]:
     """Список фильтров текущего пользователя."""
     user_id = _parse_user_id(init_data)
-    async with session_scope() as session:
-        stmt = select(Filter).where(Filter.user_id == user_id)
-        filters = (await session.execute(stmt)).scalars().all()
-        return {
-            "filters": [
-                {
-                    "id": str(f.id),
-                    "collection_id": str(f.collection_id) if f.collection_id else None,
-                    "model_id": str(f.model_id) if f.model_id else None,
-                    "background_id": str(f.background_id) if f.background_id else None,
-                    "symbol_id": str(f.symbol_id) if f.symbol_id else None,
-                    "pattern_id": str(f.pattern_id) if f.pattern_id else None,
-                    "floor_min": float(f.floor_min) if f.floor_min is not None else None,
-                    "floor_max": float(f.floor_max) if f.floor_max is not None else None,
-                    "is_active": f.is_active,
-                }
-                for f in filters
-            ]
-        }
+    stmt = select(Filter).where(Filter.user_id == user_id)
+    filters = (await session.execute(stmt)).scalars().all()
+    return {
+        "filters": [
+            {
+                "id": str(f.id),
+                "collection_id": str(f.collection_id) if f.collection_id else None,
+                "model_id": str(f.model_id) if f.model_id else None,
+                "background_id": str(f.background_id) if f.background_id else None,
+                "symbol_id": str(f.symbol_id) if f.symbol_id else None,
+                "pattern_id": str(f.pattern_id) if f.pattern_id else None,
+                "floor_min": float(f.floor_min) if f.floor_min is not None else None,
+                "floor_max": float(f.floor_max) if f.floor_max is not None else None,
+                "is_active": f.is_active,
+            }
+            for f in filters
+        ]
+    }
+
 
 
 @router.post("/filters")
 async def create_filter(
-    payload: FilterCreate, init_data: dict = Depends(get_current_user_init_data)
+    payload: FilterCreate,
+    session: AsyncSession = Depends(get_session),
+    init_data: dict = Depends(get_current_user_init_data),
 ) -> dict[str, Any]:
     """Создать фильтр для текущего пользователя."""
     user_id = _parse_user_id(init_data)
-
-    async with session_scope() as session:
-        new_filter = Filter(
-            user_id=user_id,
-            collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
-            model_id=uuid.UUID(payload.model_id) if payload.model_id else None,
-            background_id=uuid.UUID(payload.background_id) if payload.background_id else None,
-            symbol_id=uuid.UUID(payload.symbol_id) if payload.symbol_id else None,
-            pattern_id=uuid.UUID(payload.pattern_id) if payload.pattern_id else None,
-            floor_min=payload.floor_min,
-            floor_max=payload.floor_max,
-            is_active=True,
-        )
-        session.add(new_filter)
-        await session.flush()
-        filter_id = str(new_filter.id)
-
+    new_filter = Filter(
+        user_id=user_id,
+        collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,
+        model_id=uuid.UUID(payload.model_id) if payload.model_id else None,
+        background_id=uuid.UUID(payload.background_id) if payload.background_id else None,
+        symbol_id=uuid.UUID(payload.symbol_id) if payload.symbol_id else None,
+        pattern_id=uuid.UUID(payload.pattern_id) if payload.pattern_id else None,
+        floor_min=payload.floor_min,
+        floor_max=payload.floor_max,
+        is_active=True,
+    )
+    session.add(new_filter)
+    await session.flush()
+    filter_id = str(new_filter.id)
     logger.info(f"Фильтр {filter_id} создан для user {user_id}")
     return {"ok": True, "filter_id": filter_id}
 
-
 @router.delete("/filters/{filter_id}")
-async def delete_filter(filter_id: str, init_data: dict = Depends(get_current_user_init_data)) -> dict[str, Any]:
+async def delete_filter(
+    filter_id: str,
+    session: AsyncSession = Depends(get_session),
+    init_data: dict = Depends(get_current_user_init_data),
+) -> dict[str, Any]:
     """Удалить фильтр (только если он принадлежит пользователю)."""
     user_id = _parse_user_id(init_data)
-
-    async with session_scope() as session:
-        stmt = select(Filter).where(Filter.id == uuid.UUID(filter_id), Filter.user_id == user_id)
-        filt = (await session.execute(stmt)).scalar_one_or_none()
-        if filt is None:
-            raise HTTPException(status_code=404, detail="Filter not found")
-        await session.delete(filt)
-
+    stmt = select(Filter).where(Filter.id == uuid.UUID(filter_id), Filter.user_id == user_id)
+    filt = (await session.execute(stmt)).scalar_one_or_none()
+    if filt is None:
+        raise HTTPException(status_code=404, detail="Filter not found")
+    await session.delete(filt)
     return {"ok": True}
+
 
 
 @router.get("/collections/{collection_id}/stream")
