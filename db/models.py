@@ -53,9 +53,10 @@ class Collection(Base):
     icon_url: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="telegram_api",
-        comment="telegram_api | getgems | manual",
+        comment="telegram_api | getgems | manual | seed",
     )
-    floor_price: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False, server_default=text("0"))
+    # NULL = цена неизвестна (нет TonAPI-ключа / не удалось получить) — витрина показывает «—»
+    floor_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     items_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     last_updated: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -67,7 +68,7 @@ class Collection(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "source IN ('telegram_api','getgems','manual')",
+            "source IN ('telegram_api','getgems','manual','seed')",
             name="ck_collections_source",
         ),
         Index("ix_collections_floor", "floor_price"),
@@ -282,3 +283,78 @@ class ListenerState(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
+
+
+# ---------------------------------------------------------------------------
+# 11. floor_snapshots — история floor коллекции (пишется при изменении флора)
+# ---------------------------------------------------------------------------
+class FloorSnapshot(Base):
+    __tablename__ = "floor_snapshots"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    collection_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=False
+    )
+    price: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    ts: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (Index("ix_floor_snapshots_coll_ts", "collection_id", "ts"),)
+
+
+# ---------------------------------------------------------------------------
+# 12. sales — продажи NFT (для ленты продаж витрины)
+# ---------------------------------------------------------------------------
+class Sale(Base):
+    __tablename__ = "sales"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    collection_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=False
+    )
+    item_address: Mapped[str] = mapped_column(Text, nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    ts: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    buyer_tg_id: Mapped[int | None] = mapped_column(BigInteger)
+
+    __table_args__ = (
+        UniqueConstraint("item_address", "ts", name="uq_sales_item_ts"),  # dedupe повторов
+        Index("ix_sales_coll_ts", "collection_id", "ts"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 13. favorites — избранное пользователя (коллекция ИЛИ конкретный NFT)
+# ---------------------------------------------------------------------------
+class Favorite(Base):
+    __tablename__ = "favorites"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"), nullable=False
+    )
+    collection_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE")
+    )
+    item_address: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "(collection_id IS NOT NULL) <> (item_address IS NOT NULL)",
+            name="ck_favorites_exactly_one_target",
+        ),
+        Index(
+            "uq_favorites_user_collection", "user_id", "collection_id", unique=True,
+            postgresql_where=text("collection_id IS NOT NULL"),
+            sqlite_where=text("collection_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_favorites_user_item", "user_id", "item_address", unique=True,
+            postgresql_where=text("item_address IS NOT NULL"),
+            sqlite_where=text("item_address IS NOT NULL"),
+        ),
+    )
