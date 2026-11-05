@@ -209,3 +209,33 @@ def test_to_int() -> None:
     assert _to_int(7) == 7
     assert _to_int(None) is None
     assert _to_int("abc") is None
+
+
+# ---------------------------------------------------------------------------
+# 4. Одна AsyncSession + параллельные джобы: замок исключает InvalidRequestError
+# ---------------------------------------------------------------------------
+async def test_parallel_jobs_share_session_without_errors(session: Any) -> None:
+    import asyncio
+
+    await seed_collection(session)
+    r = FakeRedis()
+    responses = {
+        "floor[": {"nftCollectionFloorPrice": {"amount": {"value": "5.5"}}},
+        "model_floor[": {"nftItems": {"edges": []}},
+        "sales[": {"nftSales": {"edges": []}},
+        "counts[": {"nftItems": {"edges": []}},
+    }
+    up = make_updater(session, r, responses)
+
+    async def slow_graphql(query: str, variables: dict[str, Any], context: str = "") -> dict[str, Any]:
+        await asyncio.sleep(0)  # отдаём управление, провоцируя гонку
+        for prefix, payload in responses.items():
+            if context.startswith(prefix):
+                return payload
+        raise AssertionError(context)
+
+    up._graphql = slow_graphql  # type: ignore[method-assign]
+    await asyncio.gather(
+        up.update_floors(), up.update_recent_sales(), up.update_attribute_counts(),
+        up.update_floors(), up.update_recent_sales(),
+    )
