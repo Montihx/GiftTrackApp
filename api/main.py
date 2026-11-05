@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+from api.payments import router as payments_router
 from api.twa import router as twa_router
 from core.logging import setup_logging
 
@@ -20,6 +21,8 @@ app.add_middleware(
 )
 
 app.include_router(twa_router)
+app.include_router(payments_router)
+
 
 
 @app.on_event("startup")
