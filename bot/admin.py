@@ -1,6 +1,8 @@
 # /workspace/bot/admin.py — админ-команды (выдача доступа без оплаты)
-"""Команды только для ID из settings.admin_tg_ids: /grant, /revoke, /users."""
+"""Команды только для ID из settings.admin_tg_ids: /grant, /revoke, /users, /add_collection."""
 from __future__ import annotations
+
+import re
 
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
@@ -8,7 +10,7 @@ from aiogram.types import Message
 from sqlalchemy import select
 
 from core.config import get_settings
-from db.models import User
+from db.models import Collection, User
 from services.payments import activate_subscription
 
 admin_router = Router()
@@ -66,3 +68,61 @@ async def cmd_users(msg: Message, session) -> None:
         until = f" до {expiry:%Y-%m-%d}" if expiry else ""
         lines.append(f"{tg_id} @{username or '—'} {plan}{until}")
     await msg.answer("\n".join(lines) or "Пусто")
+
+
+_FRIENDLY_RE = re.compile(r"^[EU]Q[A-Za-z0-9_-]{46}$")
+_RAW_RE = re.compile(r"^-?\d+:[0-9a-fA-F]{64}$")
+
+
+def normalize_ton_address(raw: str) -> str | None:
+    """Проверяет адрес TON; user-friendly приводит к bounceable-виду (EQ...), иначе None."""
+    raw = raw.strip()
+    if not (_FRIENDLY_RE.match(raw) or _RAW_RE.match(raw)):
+        return None
+    try:  # каноникализация, если pytoniq-core доступен
+        from pytoniq_core import Address
+
+        return Address(raw).to_str(is_user_friendly=True, is_bounceable=True)
+    except Exception:  # noqa: BLE001 — не валим команду из-за библиотеки
+        return raw
+
+
+async def add_manual_collection(session, address: str, name: str | None = None) -> tuple[str, Collection]:
+    """Идемпотентно добавляет коллекцию с source='manual'.
+
+    Возвращает ("created"|"exists", Collection). Существующую запись не перезаписываем
+    (в т.ч. не меняем source у seed/getgems-коллекций).
+    """
+    existing = (
+        await session.execute(select(Collection).where(Collection.contract_address == address))
+    ).scalar_one_or_none()
+    if existing is not None:
+        return "exists", existing
+    coll = Collection(
+        name=(name or "").strip() or f"Collection {address[:6]}…{address[-4:]}",
+        contract_address=address,
+        source="manual",
+    )
+    session.add(coll)
+    await session.flush()
+    return "created", coll
+
+
+@admin_router.message(Command("add_collection"))
+async def cmd_add_collection(msg: Message, cmd: CommandObject, session) -> None:
+    """Добавить коллекцию вручную: /add_collection <address> [name]."""
+    if not _is_admin(msg):
+        return
+    parts = (cmd.args or "").split(maxsplit=1)
+    if not parts:
+        await msg.answer("Формат: /add_collection <address> [name]")
+        return
+    address = normalize_ton_address(parts[0])
+    if address is None:
+        await msg.answer("Некорректный адрес TON (ожидается EQ…/UQ… или 0:hex)")
+        return
+    status, coll = await add_manual_collection(session, address, parts[1] if len(parts) > 1 else None)
+    if status == "exists":
+        await msg.answer(f"ℹ️ Уже есть: {coll.name} ({coll.source})")
+    else:
+        await msg.answer(f"✅ Добавлена: {coll.name}")
