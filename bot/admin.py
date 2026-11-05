@@ -2,14 +2,13 @@
 """Команды только для ID из settings.admin_tg_ids: /grant, /revoke, /users, /add_collection."""
 from __future__ import annotations
 
-import re
-
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy import select
 
 from core.config import get_settings
+from core.ton_address import normalize_ton_address
 from db.models import Collection, User
 from services.payments import activate_subscription
 
@@ -68,23 +67,6 @@ async def cmd_users(msg: Message, session) -> None:
         until = f" до {expiry:%Y-%m-%d}" if expiry else ""
         lines.append(f"{tg_id} @{username or '—'} {plan}{until}")
     await msg.answer("\n".join(lines) or "Пусто")
-
-
-_FRIENDLY_RE = re.compile(r"^[EU]Q[A-Za-z0-9_-]{46}$")
-_RAW_RE = re.compile(r"^-?\d+:[0-9a-fA-F]{64}$")
-
-
-def normalize_ton_address(raw: str) -> str | None:
-    """Проверяет адрес TON; user-friendly приводит к bounceable-виду (EQ...), иначе None."""
-    raw = raw.strip()
-    if not (_FRIENDLY_RE.match(raw) or _RAW_RE.match(raw)):
-        return None
-    try:  # каноникализация, если pytoniq-core доступен
-        from pytoniq_core import Address
-
-        return Address(raw).to_str(is_user_friendly=True, is_bounceable=True)
-    except Exception:  # noqa: BLE001 — не валим команду из-за библиотеки
-        return raw
 
 
 async def add_manual_collection(session, address: str, name: str | None = None) -> tuple[str, Collection]:
