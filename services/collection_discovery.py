@@ -7,7 +7,7 @@ Collection Discovery (ЭТАП 2, ТЗ «МОДУЛЬ 1»).
      -> список подарков (stars_price, upgrade_stars_cost, total_count).
   B) GetGems GraphQL: POST https://api.getgems.io/graphql
      query nftCollections(tags:["telegram_gifts"]) -> EQ-адрес контракта, имя, floor.
-     Fallback при ошибке: Tonviewer API (/api/v2/search?query=gift).
+     При ошибке источник пропускается (Tonviewer-fallback удалён).
   C) Парсинг атрибутов: первые N (по умолчанию 100) NFT коллекции через pytoniq:
         get_nft_address_by_index(i) -> get_nft_data(owner/content) -> get_nft_content(metadata)
      скачиваем metadata JSON (https:// | ipfs:// -> gateway), извлекаем attributes[],
@@ -202,7 +202,7 @@ class CollectionDiscovery:
         return result
 
     # ------------------------------------------------------------------
-    # Источник B: GetGems GraphQL (+ Tonviewer fallback)
+    # Источник B: GetGems GraphQL
     # ------------------------------------------------------------------
     async def fetch_getgems_collections(self) -> list[DiscoveredCollection]:
         """
@@ -215,13 +215,14 @@ class CollectionDiscovery:
                 "statistics": {"itemsCount": 300000,
                                "minPrice": {"amount": {"value": "5.5"}}}}}], ...}}}
 
-        При недоступности GetGems — fallback на Tonviewer API.
+        При недоступности GetGems возвращает [] (без fallback).
         """
         try:
             data = await self._graphql(GQL_COLLECTIONS, {"limit": 100}, context="getgems.nftCollections")
-        except Exception as exc:  # noqa: BLE001 — любой сбой => fallback
-            logger.warning(f"GetGems недоступен ({exc!r}), использую Tonviewer fallback")
-            return await self._fetch_tonviewer_fallback()
+        except Exception as exc:  # noqa: BLE001 — GetGems может отдавать 403 (бан IP)
+            # Tonviewer-fallback удалён: каталог наполняют seed/TonAPI/manual, не падаем.
+            logger.warning(f"GetGems недоступен ({exc!r}) — пропускаю источник B")
+            return []
 
         edges = ((data.get("nftCollections") or {}).get("edges")) or []
         result: list[DiscoveredCollection] = []
@@ -243,32 +244,6 @@ class CollectionDiscovery:
                 )
             )
         logger.info(f"GetGems: найдено {len(result)} коллекций telegram_gifts")
-        return result
-
-    async def _fetch_tonviewer_fallback(self) -> list[DiscoveredCollection]:
-        """Fallback: Tonviewer search по слову 'gift' (минимум: адрес + имя + floor)."""
-        url = "https://tonviewer.com/api/v2/search"
-        params = {"query": "gift", "limit": "50"}
-        payload = await self._get_json(
-            url, context="tonviewer.search", params=params,
-            headers={"X-Api-Key": self.settings.tonviewer_api_key} if self.settings.tonviewer_api_key else None,
-        )
-        accounts = payload.get("accounts") or payload.get("result") or []
-        result: list[DiscoveredCollection] = []
-        for a in accounts:
-            addr = a.get("address") or a.get("workchain") and a.get("hex")
-            name = a.get("name")
-            if not addr or not name:
-                continue
-            result.append(
-                DiscoveredCollection(
-                    name=name,
-                    contract_address=addr,
-                    source="getgems",  # CHECK в БД допускает только telegram_api/getgems/manual
-                    floor_price=_to_decimal(a.get("floor_price") or 0),
-                )
-            )
-        logger.info(f"Tonviewer fallback: {len(result)} коллекций")
         return result
 
     # ------------------------------------------------------------------
