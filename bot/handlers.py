@@ -108,3 +108,29 @@ async def cmd_stats(msg: Message, session: AsyncSession) -> None:
         f"(Счётчик отправленных алертов ведётся в dispatcher.stats на сервере.)",
         parse_mode="HTML",
     )
+    
+@router.message(Command("subscribe"))
+async def cmd_subscribe(msg: Message, session: AsyncSession) -> None:
+    """Оформить премиум: инвойс CryptoBot."""
+    await get_or_create_user(session, msg)
+    settings = get_settings()
+    if not settings.cryptobot_token:
+        await msg.answer("Платежи пока не подключены.")
+        return
+    from services.payments import CryptoBotClient
+
+    client = CryptoBotClient(settings.cryptobot_token)
+    invoice = await client.create_invoice(
+        amount=settings.subscription_price_ton,
+        payload=str(msg.from_user.id),
+        description=f"GiftTrack Premium на {settings.subscription_days} дней",
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="💳 Оплатить", url=invoice["pay_url"])]]
+    )
+    await msg.answer(
+        f"💎 Премиум на {settings.subscription_days} дней — {settings.subscription_price_ton} TON.\n"
+        "Нажми кнопку и подтверди оплату в CryptoBot.",
+        reply_markup=keyboard,
+    )
+
