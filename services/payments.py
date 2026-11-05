@@ -57,6 +57,15 @@ async def activate_subscription(session: AsyncSession, tg_id: int, days: int) ->
     Если текущая подписка активна — продлеваем от её конца, иначе от сейчас.
     Источник не важен: оплата через вебхук или админ-команда /grant пишут одно и то же.
     """
+
+    def _ensure_aware(d: dt.datetime | None) -> dt.datetime:
+        """Привести datetime к timezone-aware (UTC)."""
+        if d is None:
+            return dt.datetime.now(dt.timezone.utc)
+        if d.tzinfo is None:
+            return d.replace(tzinfo=dt.timezone.utc)
+        return d
+
     stmt = select(User).where(User.tg_id == tg_id)
     user = (await session.execute(stmt)).scalar_one_or_none()
     if user is None:
@@ -65,10 +74,12 @@ async def activate_subscription(session: AsyncSession, tg_id: int, days: int) ->
         await session.flush()
 
     now = dt.datetime.now(dt.timezone.utc)
-    base = user.sub_expires_at if (user.sub_expires_at and user.sub_expires_at > now) else now
+    user_expiry = _ensure_aware(user.sub_expires_at)
+    base = user_expiry if user_expiry > now else now
     new_expiry = base + dt.timedelta(days=days)
     user.sub_plan = "premium"
     user.sub_expires_at = new_expiry
     await session.flush()
     logger.info(f"Подписка выдана: user {tg_id} до {new_expiry.isoformat()}")
     return new_expiry
+
