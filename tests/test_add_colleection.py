@@ -9,8 +9,6 @@ from sqlalchemy import func, select
 from bot.admin import add_manual_collection, normalize_ton_address
 from db.models import Collection
 
-pytestmark = pytest.mark.asyncio
-
 ADDR = "EQDTwwzDZK39EYHdBcnd_A6CnpQQGwRqLXjxcJkeN2vPXLkY"
 
 
