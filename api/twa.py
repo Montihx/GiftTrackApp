@@ -80,7 +80,7 @@ async def get_collections() -> dict[str, Any]:
                 # Floor из Redis (быстрый путь) или из БД
                 floor = await cache_get_json(redis, floor_key(str(coll.id)))
                 if floor is None:
-                    floor = float(coll.floor_price)
+                    floor = float(coll.floor_price) if coll.floor_price is not None else None
 
                 result.append(
                     {
