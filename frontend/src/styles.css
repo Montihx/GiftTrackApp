@@ -1,0 +1,34 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #17212b;
+  color: #fff;
+  font-size: 15px;
+}
+.app { padding: 12px; max-width: 480px; margin: 0 auto; }
+.tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.tabs button {
+  flex: 1; padding: 10px; border: none; border-radius: 8px;
+  background: #232e3c; color: #aab4c0; font-size: 15px; cursor: pointer;
+}
+.tabs button.on { background: #2b5278; color: #fff; }
+.msg { background: #2b5278; padding: 10px; border-radius: 8px; margin-bottom: 12px; }
+.empty { color: #708499; text-align: center; padding: 40px 0; }
+.card { background: #232e3c; border-radius: 10px; padding: 12px; margin-bottom: 8px; }
+.card-title { font-weight: 600; margin-bottom: 4px; }
+.card-sub { color: #aab4c0; font-size: 13px; margin-bottom: 8px; word-break: break-word; }
+.del { background: #3b2630; color: #e57373; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+.form { display: flex; flex-direction: column; gap: 6px; }
+.form label { color: #708499; font-size: 13px; margin-top: 6px; }
+.form select, .form input {
+  width: 100%; padding: 10px; border: 1px solid #2f3b4a; border-radius: 8px;
+  background: #232e3c; color: #fff; font-size: 15px;
+}
+.row { display: flex; gap: 8px; }
+.row > div { flex: 1; }
+.floor { color: #6ab7f5; font-size: 14px; margin: 4px 0; }
+.submit {
+  margin-top: 12px; padding: 14px; border: none; border-radius: 10px;
+  background: #2b5278; color: #fff; font-size: 16px; font-weight: 600; cursor: pointer;
+}
+.submit:active { background: #24466a; }
