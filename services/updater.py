@@ -149,6 +149,9 @@ class FloorAndSalesUpdater:
         self.redis = redis
         self.settings = settings or get_settings()
         self._rate = asyncio.Semaphore(self.settings.api_max_concurrency)
+        # Одна AsyncSession не поддерживает параллельные операции: все участки
+        # с self.session в любой джобе идут под этим замком (сеть — вне замка).
+        self._lock = asyncio.Lock()
         # Ленивый импорт по атрибуту => тесты могут присвоить mock до первого вызова
         self._discovery = discovery
         # Dedupe «в полёте»: не пишем одну и ту же продажу дважды из разных циклов
@@ -159,20 +162,21 @@ class FloorAndSalesUpdater:
     # ------------------------------------------------------------------
     async def update_floors(self) -> None:
         """Общий floor коллекции + floor по каждой модели -> Redis (TTL 30s) + БД."""
-        rows = (
-            await self.session.execute(
-                select(Collection.id, Collection.name, Collection.contract_address).where(
-                    ~Collection.contract_address.startswith("tg_gift:")
+        async with self._lock:
+            rows = (
+                await self.session.execute(
+                    select(Collection.id, Collection.name, Collection.contract_address).where(
+                        ~Collection.contract_address.startswith("tg_gift:")
+                    )
                 )
-            )
-        ).all()
+            ).all()
         if not rows:
             logger.debug("update_floors: коллекций с EQ-адресом в БД нет — пропускаю цикл")
             return
 
         for coll_uuid, coll_name, contract in rows:
             cid = str(coll_uuid)
-            # --- общий floor коллекции ---
+            # --- общий floor коллекции (сеть — вне замка) ---
             try:
                 data = await self._graphql(GQL_FLOOR_PRICE, {"address": contract},
                                            context=f"floor[{coll_name}]")
@@ -183,16 +187,16 @@ class FloorAndSalesUpdater:
                 continue
 
             await cache_set_json(self.redis, floor_key(cid), float(floor), ttl=self.settings.floor_cache_ttl)
-            await self._db_update_collection_floor(coll_uuid, floor)
-
-            # --- floor по моделям ---
-            models = (
-                await self.session.execute(
-                    select(Attribute.id, Attribute.value).where(
-                        Attribute.collection_id == coll_uuid, Attribute.type == "model"
+            async with self._lock:
+                await self._db_update_collection_floor(coll_uuid, floor)
+                # --- floor по моделям ---
+                models = (
+                    await self.session.execute(
+                        select(Attribute.id, Attribute.value).where(
+                            Attribute.collection_id == coll_uuid, Attribute.type == "model"
+                        )
                     )
-                )
-            ).all()
+                ).all()
             for attr_uuid, model_value in models:
                 try:
                     mdata = await self._graphql(
@@ -212,9 +216,11 @@ class FloorAndSalesUpdater:
                 await cache_set_json(
                     self.redis, floor_key(cid, model_value), float(mfloor), ttl=self.settings.floor_cache_ttl
                 )
-                await self._db_update_attribute_floor(attr_uuid, mfloor)
+                async with self._lock:
+                    await self._db_update_attribute_floor(attr_uuid, mfloor)
 
-        await self.session.commit()
+        async with self._lock:
+            await self.session.commit()
         logger.info(f"update_floors: обновлено коллекций: {len(rows)}")
 
     async def _db_update_collection_floor(self, coll_id: uuid.UUID, floor: Decimal) -> None:
@@ -241,25 +247,27 @@ class FloorAndSalesUpdater:
           Redis recent_sales:{cid}:{model} = JSON-список (TTL 30s)
           БД model_sales — INSERT c ON CONFLICT DO NOTHING (уникальность по tx-hash ниже).
         """
-        rows = (
-            await self.session.execute(
-                select(Collection.id, Collection.name, Collection.contract_address)
-                .join(Attribute, Attribute.collection_id == Collection.id)
-                .where(Attribute.type == "model", ~Collection.contract_address.startswith("tg_gift:"))
-                .distinct()
-            )
-        ).all()
+        async with self._lock:
+            rows = (
+                await self.session.execute(
+                    select(Collection.id, Collection.name, Collection.contract_address)
+                    .join(Attribute, Attribute.collection_id == Collection.id)
+                    .where(Attribute.type == "model", ~Collection.contract_address.startswith("tg_gift:"))
+                    .distinct()
+                )
+            ).all()
 
         total_new = 0
         for coll_uuid, coll_name, contract in rows:
             cid = str(coll_uuid)
-            models = (
-                await self.session.execute(
-                    select(Attribute.value).where(
-                        Attribute.collection_id == coll_uuid, Attribute.type == "model"
+            async with self._lock:
+                models = (
+                    await self.session.execute(
+                        select(Attribute.value).where(
+                            Attribute.collection_id == coll_uuid, Attribute.type == "model"
+                        )
                     )
-                )
-            ).scalars().all()
+                ).scalars().all()
 
             for model_value in models:
                 try:
@@ -293,7 +301,8 @@ class FloorAndSalesUpdater:
                     # Новая продажа (не видели в этом процессе) -> в БД
                     if tx not in self._seen_sale_hashes:
                         self._seen_sale_hashes.add(tx)
-                        await self._db_insert_sale(coll_uuid, model_value, sale)
+                        async with self._lock:
+                            await self._db_insert_sale(coll_uuid, model_value, sale)
                         total_new += 1
 
                 # В кэш кладём топ-N даже если дубли — TTL короткий, данные свежие
@@ -305,7 +314,8 @@ class FloorAndSalesUpdater:
                         ttl=self.settings.sales_cache_ttl,
                     )
 
-        await self.session.commit()
+        async with self._lock:
+            await self.session.commit()
         # Защита от разрастания множества dedupe
         if len(self._seen_sale_hashes) > 50_000:
             self._seen_sale_hashes.clear()
@@ -345,7 +355,9 @@ class FloorAndSalesUpdater:
 
             self._discovery = CollectionDiscovery(session=self.session, redis=self.redis,
                                                    settings=self.settings)
-        stats = await self._discovery.discover_all()
+        # discover_all() сам ходит в БД через ту же сессию — держим замок на весь вызов
+        async with self._lock:
+            stats = await self._discovery.discover_all()
         logger.info(f"update_collection_meta: {stats}")
 
     async def update_attribute_counts(self) -> None:
@@ -360,13 +372,14 @@ class FloorAndSalesUpdater:
 
         from core.config import map_trait_type
 
-        rows = (
-            await self.session.execute(
-                select(Collection.id, Collection.name, Collection.contract_address).where(
-                    ~Collection.contract_address.startswith("tg_gift:")
+        async with self._lock:
+            rows = (
+                await self.session.execute(
+                    select(Collection.id, Collection.name, Collection.contract_address).where(
+                        ~Collection.contract_address.startswith("tg_gift:")
+                    )
                 )
-            )
-        ).all()
+            ).all()
 
         for coll_uuid, coll_name, contract in rows:
             try:
@@ -391,15 +404,17 @@ class FloorAndSalesUpdater:
             if not counter:
                 continue
 
-            attrs = (
-                await self.session.execute(
-                    select(Attribute).where(Attribute.collection_id == coll_uuid)
-                )
-            ).scalars().all()
-            for a in attrs:
-                a.items_count = counter.get((a.type, a.value), 0)
+            async with self._lock:
+                attrs = (
+                    await self.session.execute(
+                        select(Attribute).where(Attribute.collection_id == coll_uuid)
+                    )
+                ).scalars().all()
+                for a in attrs:
+                    a.items_count = counter.get((a.type, a.value), 0)
 
-        await self.session.commit()
+        async with self._lock:
+            await self.session.commit()
         logger.info(f"update_attribute_counts: коллекций: {len(rows)}")
 
 
@@ -441,6 +456,12 @@ class FloorAndSalesUpdater:
                     raise
                 except Exception as exc:  # noqa: BLE001
                     logger.error(f"[updater:{name}] итерация упала: {exc!r}", exc_info=True)
+                    # Сессия могла остаться в failed-состоянии — не тащим её в следующий цикл
+                    try:
+                        async with self._lock:
+                            await self.session.rollback()
+                    except Exception as rb_exc:  # noqa: BLE001
+                        logger.warning(f"[updater:{name}] rollback не удался: {rb_exc!r}")
                 # Ждём период ИЛИ сигнал остановки — что раньше
                 try:
                     await asyncio.wait_for(stop_event.wait(), timeout=period)
