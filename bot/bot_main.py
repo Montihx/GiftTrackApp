@@ -14,6 +14,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from loguru import logger
 
+from bot.admin import admin_router
 from bot.handlers import router
 from core.config import get_settings
 from core.logging import setup_logging
@@ -38,6 +39,8 @@ async def _main() -> None:
     )
     dp = Dispatcher()
     dp.include_router(router)
+    dp.include_router(admin_router)
+
 
     redis = create_redis()
     sm = ShutdownManager(timeout=15)
