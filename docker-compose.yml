@@ -32,6 +32,7 @@ services:
   # Миграция БД выполняется один раз перед стартом сервисов
   migrate:
     build: .
+    image: gifttrack-app:latest
     command: alembic upgrade head
     env_file: .env
     depends_on:
@@ -40,6 +41,7 @@ services:
 
   bot:
     build: .
+    image: gifttrack-app:latest
     command: python -m bot.bot_main
     env_file: .env
     restart: unless-stopped
@@ -51,6 +53,7 @@ services:
 
   listener-ton:
     build: .
+    image: gifttrack-app:latest
     command: python -m bot.listener_main
     env_file: .env
     restart: unless-stopped
@@ -62,6 +65,7 @@ services:
 
   listener-market:
     build: .
+    image: gifttrack-app:latest
     command: python -m bot.market_main
     env_file: .env
     restart: unless-stopped
@@ -73,6 +77,7 @@ services:
 
   resolver:
     build: .
+    image: gifttrack-app:latest
     command: python -m bot.resolver_main
     env_file: .env
     volumes:
@@ -86,6 +91,7 @@ services:
 
   updater:
     build: .
+    image: gifttrack-app:latest
     command: python -m services.updater
     env_file: .env
     restart: unless-stopped
@@ -97,6 +103,7 @@ services:
 
   twa-api:
     build: .
+    image: gifttrack-app:latest
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     env_file: .env
     restart: unless-stopped

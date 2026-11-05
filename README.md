@@ -42,7 +42,9 @@ tests/      pytest (63 теста)
 git clone https://github.com/Montihx/GiftTrackApp.git && cd GiftTrackApp
 cp .env.example .env
 nano .env                       # заполните BOT_TOKEN, CRYPTOBOT_TOKEN, ADMIN_TG_IDS, DB_PASS, TWA_URL
-docker compose up -d --build
+# на слабом сервере (< 2 ГБ RAM) собирайте по одному, иначе сборка может повесить машину:
+COMPOSE_PARALLEL_LIMIT=1 docker compose build
+docker compose up -d
 docker compose ps
 docker compose logs -f bot
 ```
@@ -50,6 +52,10 @@ docker compose logs -f bot
 `migrate` отрабатывает автоматически, остальные сервисы ждут его завершения.
 Порты postgres/redis/api/frontend привязаны к `127.0.0.1`, наружу открыты
 только 80/443 через nginx.
+
+Все python-сервисы используют один образ `gifttrack-app` (общий кэш слоёв), фронтенд
+собирается отдельно. Если сервер падает при сборке — добавьте swap:
+`sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`.
 
 ### Важно про `.env`
 
