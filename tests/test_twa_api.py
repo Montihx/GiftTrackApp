@@ -75,15 +75,20 @@ async def test_create_filter_endpoint(session):
     await session.commit()
     coll_id = str(coll.id)
 
-    # Мокаем валидацию initData
+    # Мокаем валидацию initData + сессию БД (тестовая SQLite вместо PG)
     import api.twa as twa_module
 
     original_dep = twa_module.get_current_user_init_data
+    original_session = twa_module.get_session
 
     async def fake_dep():
         return {"user": '{"id": 999, "username": "api_test"}'}
 
+    async def fake_session():
+        yield session
+
     app.dependency_overrides[original_dep] = fake_dep
+    app.dependency_overrides[original_session] = fake_session
 
     try:
         async with AsyncClient(
