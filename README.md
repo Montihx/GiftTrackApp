@@ -59,12 +59,24 @@ docker compose logs -f bot
   перевыпустите его: `/revoke` в @BotFather, ключ в настройках CryptoBot.
   `.env` добавлен в `.gitignore`.
 
-### HTTPS для Telegram Web App
+### HTTPS и автопродление сертификата
 
-Telegram открывает TWA только по HTTPS. Укажите домен в `TWA_URL`, получите
-сертификат (certbot) и добавьте в `nginx.conf` `listen 443 ssl;` с путями к
-сертификату (папку сертификатов смонтируйте в сервис `nginx`). Затем задайте
-Menu Button/Web App URL у бота через @BotFather.
+Боевой хост: `gifttrack.204.216.108.27.sslip.io`. Сертификат Let's Encrypt лежит
+в `/etc/letsencrypt/live/gifttrack.204.216.108.27.sslip.io/` и монтируется в nginx
+только на чтение; `nginx.conf` уже содержит редирект 80 → 443 и TLS-блок. Порт 3000
+хоста не используется (фронтенд слушает `127.0.0.1:3001`). Для другого домена
+замените имя в `nginx.conf` и выпустите сертификат через certbot.
+
+Автопродление (certbot на хосте, standalone: на время продления nginx останавливается).
+Разрешите `ubuntu` запускать certbot без пароля: `sudo visudo -f /etc/sudoers.d/certbot`,
+строка `ubuntu ALL=(root) NOPASSWD: /usr/bin/certbot`. Затем `crontab -e`:
+
+```cron
+0 4 * * * cd ~/gifts/GiftTrackApp && docker compose stop nginx && sudo -n certbot renew --quiet; docker compose start nginx
+```
+
+`start` стоит после `;`, чтобы nginx поднялся, даже если продление не удалось.
+Telegram открывает TWA только по HTTPS; адрес задаётся в `TWA_URL` и в Menu Button у @BotFather.
 
 ### Telethon: cold path резолвера (необязательно)
 
