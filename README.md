@@ -33,7 +33,7 @@ bot/        точки входа сервисов, handlers, admin-команд
 services/   dispatcher, ton/, market/, resolver/, updater, payments, collection_discovery
 api/        FastAPI: /api/collections, /api/filters, SSE, /api/payments/webhook/<secret>
 frontend/   React TWA (Vite), Dockerfile + nginx.conf для раздачи статики
-tests/      pytest (57 тестов)
+tests/      pytest (63 теста)
 ```
 
 ## Быстрый старт
@@ -66,17 +66,33 @@ Telegram открывает TWA только по HTTPS. Укажите доме
 сертификату (папку сертификатов смонтируйте в сервис `nginx`). Затем задайте
 Menu Button/Web App URL у бота через @BotFather.
 
-### Telethon (необязательно)
+### Telethon: cold path резолвера (необязательно)
 
-Сервис `resolver` без `API_ID`/`API_HASH`/`PHONE` просто простаивает.
-Первый вход Telethon требует кода из Telegram:
-`docker compose run --rm -it resolver` (один раз, сессия сохранится).
+Воркер `resolver` сканирует bio известных пользователей (username из `users`,
+истории владельцев и `wallet_tg_map`) на TON-адреса (`EQ…`/`UQ…`/raw/`ton://`),
+строит индекс «адрес → пользователь» в Redis и разбирает очередь
+`telethon_resolve_queue`: найденные владельцы пишутся в `wallet_tg_map`
+(`source=telethon`) и кэш. Telegram не умеет искать по тексту bio, поэтому
+охватываются только известные боту пользователи.
+
+Настройка: заполните `API_ID`, `API_HASH`, `PHONE` в `.env` (лучше отдельный
+аккаунт, не основной), затем один раз войдите (код из Telegram):
+
+```bash
+docker compose run --rm -it resolver python -m bot.resolver_main --login
+docker compose restart resolver
+```
+
+Сессия хранится в томе `tgsessions`. Без авторизации воркер просто простаивает
+и пишет подсказку в лог. Пауза между запросами, размер пачки и период повторного
+скана настраиваются: `BIO_SCAN_DELAY` (2 с), `BIO_SCAN_BATCH` (100),
+`BIO_RESCAN_DAYS` (7), `BIO_CYCLE_SECONDS` (600). `FloodWait` соблюдается автоматически.
 
 ## Локальная разработка
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 57 тестов
+pytest                          # 63 теста
 cd frontend && npm install && npm run dev   # /api проксируется на localhost:8000
 ```
 
@@ -92,7 +108,8 @@ cd frontend && npm install && npm run dev   # /api проксируется на
 
 ## Статус
 
-Реализованы все модули: discovery и updater, TON-листенер, листенер маркетплейсов,
-резолвер владельцев, диспетчер и хендлеры бота, TWA API + React-фронтенд,
-оплата через CryptoBot, nginx. Не реализовано: скан bio в Telethon-воркере
-(`TODO` в `bot/resolver_main.py`), поэтому резолвинг идёт по основному каскаду.
+Реализованы все модули ТЗ: discovery и updater, TON-листенер, листенер
+маркетплейсов, каскадный резолвер владельцев (включая Telethon-скан bio),
+диспетчер и хендлеры бота, TWA API + React-фронтенд, оплата через CryptoBot, nginx.
+Отличия от ТЗ: фронтенд на JavaScript (JSX), а не TypeScript; точки входа сервисов
+лежат в `bot/*_main.py`.

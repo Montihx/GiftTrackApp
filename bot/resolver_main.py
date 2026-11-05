@@ -17,14 +17,16 @@ from core.logging import setup_logging
 from core.redis_client import create_redis
 from core.shutdown import ShutdownManager
 from db.engine import dispose_engine, session_scope
+from services.resolver.telethon_worker import BioScanner
 
 
 async def _telethon_worker(redis, stop_event: asyncio.Event) -> None:
     """
-    Фоновый джоб: берёт TON-адреса из очереди telethon_resolve_queue,
-    сканирует bio пользователей через Telethon на наличие ton:// ссылок.
+    Cold path: скан bio известных пользователей через Telethon + разбор очереди
+    telethon_resolve_queue (см. services/resolver/telethon_worker.py).
 
-    Требует авторизации userbot (API_ID, API_HASH, PHONE в .env).
+    Требует авторизованной сессии. Первый вход (код из Telegram, один раз):
+        docker compose run --rm -it resolver python -m bot.resolver_main --login
     """
     settings = get_settings()
     if not (settings.api_id and settings.api_hash and settings.phone):
@@ -32,22 +34,41 @@ async def _telethon_worker(redis, stop_event: asyncio.Event) -> None:
         await stop_event.wait()  # не завершаемся, чтобы контейнер не уходил в crash-loop
         return
 
+    client = _make_client(settings)
+    await client.connect()
+    if not await client.is_user_authorized():
+        logger.error(
+            "Telethon не авторизован. Выполните один раз: "
+            "docker compose run --rm -it resolver python -m bot.resolver_main --login"
+        )
+        await stop_event.wait()
+        await client.disconnect()
+        return
+
+    logger.info("Telethon worker запущен")
+    scanner = BioScanner(client, redis, session_scope, settings)
+    try:
+        await scanner.run(stop_event)
+    finally:
+        await client.disconnect()
+
+
+def _make_client(settings):
+    from pathlib import Path
+
     from telethon import TelegramClient
 
-    client = TelegramClient("resolver_session", settings.api_id, settings.api_hash)
+    Path(settings.telethon_session).parent.mkdir(parents=True, exist_ok=True)
+    return TelegramClient(settings.telethon_session, settings.api_id, settings.api_hash)
+
+
+async def _login() -> None:
+    """Интерактивный вход userbot (код из Telegram / пароль 2FA)."""
+    settings = get_settings()
+    client = _make_client(settings)
     await client.start(phone=settings.phone)
-    logger.info("Telethon worker запущен")
-
-    while not stop_event.is_set():
-        ton_address = await redis.brpop("telethon_resolve_queue", timeout=5)
-        if ton_address is None:
-            continue
-
-        ton_address = ton_address[1].decode()
-        logger.debug(f"Telethon scan: {ton_address[:12]}…")
-        # TODO: реализовать скан bio пользователей по ton_address
-        # (поиск пользователей, у которых в bio есть ton:// или адрес кошелька)
-
+    me = await client.get_me()
+    print(f"Авторизован как @{me.username or me.id}. Сессия сохранена.")
     await client.disconnect()
 
 
@@ -68,4 +89,6 @@ async def _main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(_main())
+    import sys
+
+    asyncio.run(_login() if "--login" in sys.argv else _main())

@@ -17,7 +17,7 @@ PY
 
 COPY . .
 
-RUN useradd -m app && chown -R app:app /app
+RUN useradd -m app && mkdir -p /app/sessions && chown -R app:app /app
 USER app
 
 CMD ["python", "-m", "bot.bot_main"]

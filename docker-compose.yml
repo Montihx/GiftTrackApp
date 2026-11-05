@@ -75,6 +75,8 @@ services:
     build: .
     command: python -m bot.resolver_main
     env_file: .env
+    volumes:
+      - tgsessions:/app/sessions
     restart: unless-stopped
     depends_on:
       migrate:
@@ -134,3 +136,4 @@ services:
 volumes:
   pgdata:
   redisdata:
+  tgsessions:

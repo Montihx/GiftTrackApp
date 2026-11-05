@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     api_id: int = Field(default=0)
     api_hash: str = Field(default="")
     phone: str = Field(default="")
+    telethon_session: str = Field(default="sessions/resolver_session")
+    # Анти-FloodWait: пауза между запросами, лимит за цикл, повторный скан не чаще N дней
+    bio_scan_delay: float = Field(default=2.0)
+    bio_scan_batch: int = Field(default=100)
+    bio_rescan_days: int = Field(default=7)
+    bio_cycle_seconds: int = Field(default=600)
 
     # --- БД / Redis ---
     db_url: str = Field(
