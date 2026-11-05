@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     getgems_ws_url: str = Field(default="wss://api.getgems.io/graphql")
     getgems_api_url: str = Field(default="https://api.getgems.io/graphql")
     tonviewer_api_key: str = Field(default="")
+    # TonAPI (tonconsole.com). Ключ есть -> TonAPI primary; нет -> seed-каталог + GetGems fallback
+    tonapi_key: str = Field(default="")
+    tonapi_url: str = Field(default="https://tonapi.io")
+    # У TonAPI нет эндпоинта floor: считаем min(sale.price) по items коллекции.
+    # Если items больше лимита — floor НЕ пишем (частичный скан даёт неверную цену).
+    tonapi_floor_scan_limit: int = Field(default=3000)
+    tonapi_poll_interval: float = Field(default=15.0)
+    # Seed-каталог коллекций (upsert при старте updater)
+    seed_catalog_path: str = Field(default="db/seed/gift_collections.json")
     telegram_api_base: str = Field(
         default="https://api.telegram.org", description="База Bot API (для тестов можно подменить)"
     )
@@ -97,6 +106,10 @@ class Settings(BaseSettings):
     subscription_price_ton: float = Field(default=10.0, description="Цена подписки в TON")
     subscription_days: int = Field(default=30, description="Длительность подписки в днях")
     admin_tg_ids: str = Field(default="", description="TG ID админов через запятую")
+
+    @property
+    def tonapi_enabled(self) -> bool:
+        return bool(self.tonapi_key.strip())
 
     def is_admin(self, tg_id: int) -> bool:
         """Проверка, является ли пользователь админом."""
