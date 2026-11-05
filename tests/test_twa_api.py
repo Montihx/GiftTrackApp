@@ -104,3 +104,4 @@ async def test_create_filter_endpoint(session):
             assert "filter_id" in data
     finally:
         app.dependency_overrides.clear()
+
