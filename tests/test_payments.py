@@ -21,7 +21,9 @@ async def test_activate_subscription_new_user(session):
     user = (await session.execute(select(User).where(User.tg_id == 111))).scalar_one()
     assert user.sub_plan == "premium"
     assert user.sub_expires_at is not None
-    assert user.sub_expires_at > dt.datetime.now(dt.timezone.utc)
+    expected_expiry = dt.datetime.now(dt.timezone.utc)
+    assert user.sub_expires_at.replace(tzinfo=None) > expected_expiry.replace(tzinfo=None)
+
 
 
 @pytest.mark.asyncio
