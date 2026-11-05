@@ -68,8 +68,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.config import Settings, get_settings
 from core.redis_client import cache_set_json, floor_key, recent_sales_key
 from core.retry import with_retry
-from db.models import Attribute, Collection, ModelSale
+from db.models import Attribute, Collection, FloorSnapshot, ModelSale, Sale
 from services.collection_discovery import _http_request, _to_decimal
+from services.seed import upsert_seed
+from services.tonapi import TonApiClient
 
 # ---------------------------------------------------------------------------
 # GraphQL-запросы (см. докстринг модуля с примерами ответов)
@@ -144,6 +146,7 @@ class FloorAndSalesUpdater:
         redis: Any,
         settings: Settings | None = None,
         discovery: Any | None = None,
+        tonapi: TonApiClient | None = None,
     ) -> None:
         self.session = session
         self.redis = redis
@@ -152,6 +155,8 @@ class FloorAndSalesUpdater:
         # Одна AsyncSession не поддерживает параллельные операции: все участки
         # с self.session в любой джобе идут под этим замком (сеть — вне замка).
         self._lock = asyncio.Lock()
+        # TonAPI primary при наличии ключа; без ключа — GetGems GraphQL (fallback)
+        self._tonapi = tonapi or TonApiClient(self.settings, self._rate)
         # Ленивый импорт по атрибуту => тесты могут присвоить mock до первого вызова
         self._discovery = discovery
         # Dedupe «в полёте»: не пишем одну и ту же продажу дважды из разных циклов
@@ -178,12 +183,17 @@ class FloorAndSalesUpdater:
             cid = str(coll_uuid)
             # --- общий floor коллекции (сеть — вне замка) ---
             try:
-                data = await self._graphql(GQL_FLOOR_PRICE, {"address": contract},
-                                           context=f"floor[{coll_name}]")
-                fp = ((data.get("nftCollectionFloorPrice") or {}).get("amount") or {}).get("value")
-                floor = _to_decimal(fp)
+                if self._tonapi.enabled:
+                    floor = await self._tonapi.fetch_collection_floor(contract)
+                else:
+                    data = await self._graphql(GQL_FLOOR_PRICE, {"address": contract},
+                                               context=f"floor[{coll_name}]")
+                    fp = ((data.get("nftCollectionFloorPrice") or {}).get("amount") or {}).get("value")
+                    floor = _to_decimal(fp)
             except Exception as exc:  # noqa: BLE001 — одна коллекция не роняет цикл
                 logger.warning(f"update_floors: floor для '{coll_name}' не получен: {exc!r}")
+                continue
+            if floor is None:  # цена неизвестна (нет листингов / скан неполный) — floor остаётся как есть
                 continue
 
             await cache_set_json(self.redis, floor_key(cid), float(floor), ttl=self.settings.floor_cache_ttl)
@@ -197,6 +207,8 @@ class FloorAndSalesUpdater:
                         )
                     )
                 ).all()
+            if self._tonapi.enabled:
+                models = []  # TonAPI не даёт floor по трейтам — модельные floors только через GetGems
             for attr_uuid, model_value in models:
                 try:
                     mdata = await self._graphql(
@@ -224,7 +236,18 @@ class FloorAndSalesUpdater:
         logger.info(f"update_floors: обновлено коллекций: {len(rows)}")
 
     async def _db_update_collection_floor(self, coll_id: uuid.UUID, floor: Decimal) -> None:
-        """UPDATE по PK (не INSERT — запись гарантированно существует, мы её только что прочитали)."""
+        """UPDATE по PK (не INSERT — запись гарантированно существует, мы её только что прочитали).
+
+        При изменении floor дополнительно пишем FloorSnapshot(collection_id, price, ts).
+        """
+        tbl = Collection.__table__
+        prev = (
+            await self.session.execute(select(tbl.c.floor_price).where(tbl.c.id == coll_id))
+        ).scalar_one_or_none()
+        if prev is None or Decimal(str(prev)) != floor:
+            self.session.add(
+                FloorSnapshot(collection_id=coll_id, price=floor, ts=dt.datetime.now(dt.timezone.utc))
+            )
         await self.session.execute(
             pg_update(Collection.__table__)
             .where(Collection.__table__.c.id == coll_id)
@@ -344,10 +367,29 @@ class FloorAndSalesUpdater:
             )
             .on_conflict_do_nothing()  # страховка; основной dedupe — по _seen_sale_hashes
         )
+        # Лента продаж витрины (таблица sales); дубли отсекает uq(item_address, ts)
+        if sale.get("nft_address"):
+            await self.session.execute(
+                pg_insert(Sale.__table__)
+                .values(
+                    collection_id=coll_id,
+                    item_address=sale["nft_address"],
+                    price=_to_decimal(sale.get("price")),
+                    ts=sold_at,
+                )
+                .on_conflict_do_nothing()
+            )
 
     # ------------------------------------------------------------------
     # Джоба 3: discovery (раз в час)
     # ------------------------------------------------------------------
+    async def seed_catalog(self) -> dict[str, int]:
+        """Upsert seed-каталога (db/seed/gift_collections.json); существующие не трогаем."""
+        async with self._lock:
+            stats = await upsert_seed(self.session, self.settings.seed_catalog_path)
+            await self.session.commit()
+        return stats
+
     async def update_collection_meta(self) -> None:
         """Полный цикл обнаружения коллекций/атрибутов (services/collection_discovery)."""
         if self._discovery is None:
@@ -470,6 +512,12 @@ class FloorAndSalesUpdater:
             logger.info(f"[updater:{name}] остановлен")
 
         s = self.settings
+        try:  # seed — до первого цикла, чтобы витрина не была пустой
+            await self.seed_catalog()
+        except Exception as exc:  # noqa: BLE001 — сбой seed не должен останавливать updater
+            logger.error(f"seed_catalog упал: {exc!r}")
+            async with self._lock:
+                await self.session.rollback()
         await asyncio.gather(
             _loop("floors", self.update_floors, s.floor_update_interval),
             _loop("sales", self.update_recent_sales, s.sales_update_interval),
