@@ -96,15 +96,25 @@ async def _login_qr() -> None:
         print(f"Уже авторизован как @{me.username or me.id}.")
         await client.disconnect()
         return
+    import datetime as dt
+
+    qr = await client.qr_login()
+    deadline = asyncio.get_running_loop().time() + 600  # 10 минут на вход, дальше — запустить заново
     while True:
-        qr = await client.qr_login()
+        print("\033[2J\033[H", end="")  # очистить экран: виден только актуальный QR
         _print_qr(qr.url)
-        print("Отсканируйте QR в Telegram: Настройки → Устройства → Подключить устройство (ждём до 2 мин)")
+        # Токен QR живёт ~30 с: ждём до его истечения и показываем новый, иначе Telegram ответит «неверный QR»
+        left = (qr.expires - dt.datetime.now(dt.timezone.utc)).total_seconds() - 2
+        print(f"Отсканируйте в Telegram: Настройки → Устройства → Подключить устройство. Код обновится через {max(1, int(left))} с.")
         try:
-            await qr.wait(timeout=120)
+            await qr.wait(timeout=max(3.0, left))
             break
         except asyncio.TimeoutError:
-            print("QR устарел — показываю новый.")
+            if asyncio.get_running_loop().time() > deadline:
+                print("Время вышло. Запустите вход ещё раз.")
+                await client.disconnect()
+                return
+            await qr.recreate()
         except errors.SessionPasswordNeededError:
             await client.sign_in(password=getpass("Облачный пароль Telegram: "))
             break
