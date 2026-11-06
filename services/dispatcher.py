@@ -71,6 +71,7 @@ from core.redis_client import (
 )
 from db.models import Attribute, Filter, User
 from services.rate_limit import SendRateLimiter
+from services.user_settings import can_receive
 from services.owner_lookup import gift_slug, request_owner
 from services.resolver.resolver import OwnerResolver
 
@@ -606,10 +607,9 @@ class NotificationDispatcher:
         """Из user_ids — без забаненных и (если SUBSCRIPTION_REQUIRED=true) только с активной платной подпиской."""
         if not user_ids:
             return user_ids
-        banned = {r[0] for r in (await self.session.execute(
-            select(User.tg_id).where(User.tg_id.in_(user_ids), User.is_banned.is_(True))
-        )).all()}
-        user_ids = user_ids - banned
+        users = (await self.session.execute(select(User).where(User.tg_id.in_(user_ids)))).scalars().all()
+        blocked = {u.tg_id for u in users if not can_receive(u)}  # бан, пауза /pause, тихие часы /quiet
+        user_ids = user_ids - blocked
         if not self.settings.subscription_required or not user_ids:
             return user_ids
         now = dt.datetime.now(dt.timezone.utc)

@@ -16,6 +16,7 @@ from loguru import logger
 
 from bot.admin import admin_router
 from bot.privacy import privacy_router
+from bot.user_settings import settings_router
 from bot.handlers import router
 from core.config import get_settings
 from core.logging import setup_logging
@@ -39,9 +40,10 @@ async def _main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
-    dp.include_router(router)
-    dp.include_router(admin_router)
+    dp.include_router(admin_router)  # первым: админ-команды перехватывают только сообщения админов
     dp.include_router(privacy_router)
+    dp.include_router(settings_router)
+    dp.include_router(router)
 
 
     redis = create_redis()
@@ -76,11 +78,17 @@ async def _main() -> None:
 
         await HealthMonitor(bot, redis, settings).run(sm._stop_event)  # noqa: SLF001
 
+    async def run_reminders() -> None:
+        from services.subscription_reminder import run as reminders
+
+        await reminders(bot, session_scope, redis, sm._stop_event)  # noqa: SLF001
+
     async def combined() -> None:
         dispatcher_task = asyncio.create_task(run_dispatcher())
         bot_task = asyncio.create_task(run_bot())
         health_task = asyncio.create_task(run_health())
-        await asyncio.gather(dispatcher_task, bot_task, health_task)
+        reminders_task = asyncio.create_task(run_reminders())
+        await asyncio.gather(dispatcher_task, bot_task, health_task, reminders_task)
 
     try:
         await sm.run(combined)
