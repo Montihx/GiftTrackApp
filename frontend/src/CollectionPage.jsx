@@ -148,12 +148,18 @@ export default function CollectionPage({ id }) {
         </button>
       </div>
 
-      {(detail.issued_count != null || detail.tg_floor_price != null || onchainFloor != null) && (
+      {(detail.issued_count != null || detail.tg_floor_price != null || onchainFloor != null || Object.keys(detail.market_floors || {}).length > 0) && (
         <div className="panel rows" style={{ marginBottom: 12 }}>
           <div className="row-item">
             <div className="row-main">Флор в блокчейне</div>
             <div className="row-price">{fmtTon(onchainFloor)}</div>
           </div>
+          {Object.entries(detail.market_floors || {}).map(([src, price]) => (
+            <div className="row-item" key={src}>
+              <div className="row-main">Флор {src === "mrkt" ? "MRKT" : "Portals"}</div>
+              <div className="row-price">{fmtTon(price)}</div>
+            </div>
+          ))}
           {detail.tg_floor_price != null && (
             <div className="row-item">
               <div className="row-main">

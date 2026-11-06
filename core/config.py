@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     coin_label: str = Field(default="GRAM")
     # показывать флор маркета Telegram (отдельной строкой на странице коллекции); на карточках всегда ончейн-флор
     tg_floor_show: bool = Field(default=False)
+    # флоры MRKT/Portals (вход через их мини-приложения вашим Telegram-аккаунтом; без обхода защиты)
+    market_floors_enabled: bool = Field(default=False)
+    market_floors_sources: str = Field(default="mrkt,portals")
+    market_floors_interval: float = Field(default=1.5, ge=0.5)  # пауза между запросами, с
+    market_floors_ttl: int = Field(default=1800, ge=60)
     # Владелец подарка по slug через Telegram (для листингов из блокчейна и апгрейдов)
     owner_lookup_enabled: bool = Field(default=True)
     owner_lookup_timeout: float = Field(default=4.0, ge=0)  # сколько уведомление ждёт ответ воркера, с

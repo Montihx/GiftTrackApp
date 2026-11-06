@@ -23,7 +23,9 @@ export function CollectionCard({ c, onOpen }) {
       <div className="ccard-name">{c.name}</div>
       <div className="ccard-floor">
         {fmtTon(c.best_floor ?? c.floor_price)}
-        {c.best_floor_source === "telegram" && <span className="src" title="Флор маркета Telegram">TG</span>}
+        {c.best_floor_source && c.best_floor_source !== "onchain" && (
+          <span className="src" title="Самый низкий флор среди маркетов">{c.best_floor_source === "mrkt" ? "MRKT" : "Portals"}</span>
+        )}
       </div>
       <div className="ccard-meta">
         <ChangeBadge value={c.floor_24h_change} />
