@@ -46,6 +46,7 @@ class FilterCreate(BaseModel):
     pattern_id: str | None = None
     floor_min: float | None = Field(default=None, ge=0)
     floor_max: float | None = Field(default=None, ge=0)
+    require_owner: bool = True  # слать только если известен контакт владельца
 
 
 def _parse_user_id(init_data: dict[str, Any]) -> int:
@@ -98,6 +99,7 @@ async def get_filters(
                 "floor_min": float(f.floor_min) if f.floor_min is not None else None,
                 "floor_max": float(f.floor_max) if f.floor_max is not None else None,
                 "is_active": f.is_active,
+                "require_owner": f.require_owner,
             }
             for f in filters
         ]
@@ -127,6 +129,7 @@ async def create_filter(
         pattern_id=uuid.UUID(payload.pattern_id) if payload.pattern_id else None,
         floor_min=payload.floor_min,
         floor_max=payload.floor_max,
+        require_owner=payload.require_owner,
         is_active=True,
     )
     session.add(new_filter)

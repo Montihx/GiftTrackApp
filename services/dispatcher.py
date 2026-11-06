@@ -68,6 +68,7 @@ from core.redis_client import (
     recent_sales_key,
 )
 from db.models import Attribute, Filter
+from services.owner_lookup import gift_slug, request_owner
 from services.resolver.resolver import OwnerResolver
 
 
@@ -75,6 +76,10 @@ MARKET_TITLES = {
     "getgems": "GetGems", "marketapp": "Marketapp", "fragment": "Fragment", "portals": "Portals",
     "tonnel": "Tonnel", "mrkt": "MRKT", "xgift": "XGift", "tonapi": "TON", "telegram": "Telegram Market",
 }
+
+
+def _has_contact(owner: dict[str, Any]) -> bool:
+    return bool(owner.get("username") or owner.get("tg_user_id"))
 
 
 def market_title(slug: str | None) -> str:
@@ -168,18 +173,21 @@ class NotificationDispatcher:
             except (ValueError, AttributeError):
                 pass
 
-        # Резолвим владельца
-        owner = await self.resolver.resolve(owner_ton) if owner_ton else {}
-        owner_link = self._owner_link(owner, owner_ton)
+        # Владелец: кошелёк -> резолвер; для только что улучшенного подарка владелец (кошелёк минтера) ничего не
+        # даёт — тогда Telegram по slug подарка
+        name = metadata.get("name") or f"NFT #{payload.get('index', '?')}"
+        owner = await self._find_owner(owner_ton or "", name)
+        owner_link = self._owner_link(owner, owner_ton or "")
 
         # Формируем сообщение
         lines = ["🚨 <b>АПГРЕЙД</b>"]
-        name = metadata.get("name") or f"NFT #{payload.get('index', '?')}"
         lines.append(f"🎭 <b>{name}</b>")
         if metadata.get("model"):
             lines.append(f"Модель: {metadata['model']}")
         if metadata.get("background"):
             lines.append(f"Фон: {metadata['background']}")
+        if metadata.get("symbol"):
+            lines.append(f"Символ: {metadata['symbol']}")
         if metadata.get("pattern"):
             lines.append(f"Узор: {metadata['pattern']}")
         lines.extend(await self._rarity_and_supply_lines(collection_id, metadata))
@@ -190,7 +198,7 @@ class NotificationDispatcher:
         text = "\n".join(lines)
         keyboard = self._owner_keyboard(owner)
 
-        await self._send_to_subscribers(collection_id, metadata, text, keyboard)
+        await self._send_to_subscribers(collection_id, metadata, text, keyboard, has_contact=_has_contact(owner))
         self.stats["upgrades"] += 1
 
 
@@ -216,7 +224,7 @@ class NotificationDispatcher:
             owner = {"tg_user_id": payload.get("seller_tg_id"), "username": payload.get("seller_username"),
                      "name": payload.get("seller_name")}
         else:
-            owner = await self.resolver.resolve(seller_ton) if seller_ton else {}
+            owner = await self._find_owner(seller_ton, payload.get("nft_name"))
         owner_link = self._owner_link(owner, seller_ton)
 
         # Собираем аналитику из Redis
@@ -296,7 +304,7 @@ class NotificationDispatcher:
         text = "\n".join(lines)
         keyboard = self._owner_keyboard(owner, gift_link=link)
 
-        await self._send_to_subscribers(collection_id, attributes, text, keyboard)
+        await self._send_to_subscribers(collection_id, attributes, text, keyboard, has_contact=_has_contact(owner))
         self.stats["listings"] += 1
 
 
@@ -307,12 +315,29 @@ class NotificationDispatcher:
         await self._send_to_subscribers(collection_id, payload.get("attributes") or {}, text, None)
         self.stats["sales"] += 1
 
+    async def _find_owner(self, owner_ton: str, nft_name: str | None) -> dict[str, Any]:
+        """Контакт владельца: сначала кошелёк (резолвер), затем Telegram по slug подарка (воркер resolver)."""
+        owner: dict[str, Any] = {}
+        if owner_ton:
+            try:
+                owner = await self.resolver.resolve(owner_ton) or {}
+            except Exception as exc:  # noqa: BLE001 — резолвер не должен ронять уведомление
+                logger.debug(f"resolver: {exc!r}")
+        if not _has_contact(owner) and self.settings.owner_lookup_enabled:
+            slug = gift_slug(nft_name)
+            if slug:
+                found = await request_owner(self.redis, slug, timeout=self.settings.owner_lookup_timeout)
+                if found:
+                    owner = {**owner, **found}
+        return owner
+
     async def _send_to_subscribers(
         self,
         collection_id: str | None,
         attributes: dict[str, Any],
         text: str,
         keyboard: InlineKeyboardMarkup | None,
+        has_contact: bool = True,
     ) -> None:
         """Находит подписчиков с подходящими фильтрами и шлёт им сообщение параллельно.
 
@@ -343,6 +368,8 @@ class NotificationDispatcher:
 
         target_users = set()
         for f in filters:
+            if not has_contact and f.require_owner:
+                continue  # фильтр просит слать только с контактом владельца
             ok = True
             for fid, key in ((f.model_id, "model"), (f.background_id, "background"),
                              (f.symbol_id, "symbol"), (f.pattern_id, "pattern")):

@@ -426,3 +426,35 @@ async def test_stream_rechecks_unindexed_item_once(session: Any) -> None:
     await asyncio.gather(*list(stream._rechecks))
     assert calls["n"] == 2 and stream.stats["rechecked"] == 1
     assert [e["price_ton"] for e in redis.events(STREAM_NFT_LISTINGS)] == [33.0]
+
+
+async def test_new_items_after_first_pass_become_upgrade_events(session: Any) -> None:
+    from core.redis_client import STREAM_NFT_UPGRADES
+
+    coll, redis, client, sync = await _setup(session)
+    client.items = [raw_item("0:a", 1, "0:o1"), raw_item("0:b", 2, "0:o2")]
+    await sync.sync_collection(coll.id, "Teddy", ADDR, now=NOW)  # bootstrap: содержимое коллекции — не апгрейды
+    assert redis.events(STREAM_NFT_UPGRADES) == []
+
+    client.items.append(raw_item("0:new", 3, "0:minter", model="Pepe"))  # улучшили новый подарок
+    await sync.sync_collection(coll.id, "Teddy", ADDR, now=NOW + dt.timedelta(seconds=15))
+    ev = redis.events(STREAM_NFT_UPGRADES)
+    assert len(ev) == 1 and ev[0]["type"] == "mint" and ev[0]["nft_address"] == "0:new"
+    assert ev[0]["collection_id"] == str(coll.id) and ev[0]["index"] == 3
+    assert ev[0]["metadata"]["name"] == "Teddy #3" and ev[0]["metadata"]["model"] == "Pepe"
+    assert ev[0]["metadata"]["symbol"] == "Moon"
+
+    await sync.sync_collection(coll.id, "Teddy", ADDR, now=NOW + dt.timedelta(seconds=30))
+    assert len(redis.events(STREAM_NFT_UPGRADES)) == 1  # повторного события нет
+
+
+async def test_burst_of_new_items_is_not_announced(session: Any) -> None:
+    from core.redis_client import STREAM_NFT_UPGRADES
+
+    coll, redis, client, _ = await _setup(session)
+    sync = TonApiSync(session, redis, Settings(tonapi_key="k", upgrade_burst_max=3), client=client)  # type: ignore[arg-type]
+    client.items = [raw_item("0:a", 1, "0:o1")]
+    await sync.sync_collection(coll.id, "Teddy", ADDR, now=NOW)
+    client.items += [raw_item(f"0:n{i}", 10 + i, "0:m") for i in range(5)]
+    await sync.sync_collection(coll.id, "Teddy", ADDR, now=NOW + dt.timedelta(seconds=15))
+    assert redis.events(STREAM_NFT_UPGRADES) == []

@@ -10,6 +10,7 @@ const EMPTY_FORM = {
   symbol: "",
   floor_min: "",
   floor_max: "",
+  require_owner: true, // слать только если можно написать владельцу
 };
 
 // Выпадающий список с поиском по буквам (без сторонних UI-библиотек)
@@ -202,6 +203,7 @@ export default function Filters() {
         symbol_id: form.symbol || null,
         floor_min: floorMin,
         floor_max: floorMax,
+        require_owner: form.require_owner,
       });
       setMsg("Фильтр создан ✓");
       setForm(EMPTY_FORM);
@@ -232,7 +234,8 @@ export default function Filters() {
     if (f.floor_min != null || f.floor_max != null) {
       parts.push(`Флор модели ${f.floor_min != null ? `от ${f.floor_min}` : ""} ${f.floor_max != null ? `до ${f.floor_max}` : ""} TON`.replace(/\s+/g, " "));
     }
-    return parts.length ? parts.join(" · ") : "Все листинги и продажи";
+    const base = parts.length ? parts.join(" · ") : "Все листинги и продажи";
+    return f.require_owner === false ? `${base} · даже без контакта владельца` : base;
   };
 
   return (
@@ -344,6 +347,18 @@ export default function Filters() {
             )}
             {rangeError && <div className="fblock-err">«от» больше, чем «до»</div>}
           </div>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.require_owner}
+              onChange={(e) => setField("require_owner", e.target.checked)}
+            />
+            <span>
+              Только если можно написать владельцу
+              <small>Выключите, чтобы получать листинги и апгрейды и без контакта продавца</small>
+            </span>
+          </label>
 
           <div className="form-actions">
             <button type="button" className="btn ghost" onClick={cancel}>Отмена</button>

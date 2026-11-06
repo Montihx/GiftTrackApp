@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     phone: str = Field(default="")
     telethon_session: str = Field(default="sessions/resolver_session")
     # Маркет подарков Telegram (официальный MTProto, тот же Telethon-аккаунт; сервис resolver)
+    # Владелец подарка по slug через Telegram (для листингов из блокчейна и апгрейдов)
+    owner_lookup_enabled: bool = Field(default=True)
+    owner_lookup_timeout: float = Field(default=4.0, ge=0)  # сколько уведомление ждёт ответ воркера, с
+    owner_lookup_interval: float = Field(default=1.0, ge=0.2)  # пауза воркера между запросами к Telegram, с
+    # Апгрейды из скана: больше стольких новых предметов за один проход чанка — не рассылать (сбой, не апгрейды)
+    upgrade_burst_max: int = Field(default=20, ge=1)
     tg_market_enabled: bool = Field(default=True)
     tg_market_interval: float = Field(default=2.0, ge=0.5)  # пауза между запросами листингов, с
     tg_market_catalog_interval: int = Field(default=300, ge=30)  # каталог/флоры маркета, с

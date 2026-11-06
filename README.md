@@ -28,10 +28,10 @@ Redis 7 · React 18 + Vite (TWA) · Docker Compose · Nginx · CryptoBot API
 
 ```
 core/       config, logging, redis, retry, graceful shutdown, ton_address
-db/         модели SQLAlchemy 2.0, Alembic-миграции (0001–0004), seed/gift_collections.json
+db/         модели SQLAlchemy 2.0, Alembic-миграции (0001–0005), seed/gift_collections.json
 bot/        точки входа сервисов (bot/*_main.py), handlers, admin-команды
 services/   tonapi + tonapi_sync + tonapi_stream + gift_discovery (TonAPI), market/ (GetGems), ton/ (Tonviewer), updater, floors,
-            seed, showcase, dispatcher, resolver/, telegram_market, payments, collection_discovery
+            seed, showcase, dispatcher, resolver/, telegram_market, owner_lookup, payments, collection_discovery
 api/        FastAPI: витрина (/api/collections, /api/items, /api/favorites, /api/subscription),
             фильтры (/api/filters), SSE, вебхук /api/payments/webhook/<secret>
 frontend/   React TWA (Vite, JSX, без роутера/UI-библиотек), Dockerfile + nginx.conf
@@ -201,6 +201,17 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 опрос «новыми» оказалось больше — рассылка пропускается (сбой дедупликации не превращается в спам). Вход аккаунта — см. «Telethon» выше;
 лучше отдельный аккаунт.
 
+**Владелец и уведомления «АПГРЕЙД».** Адрес кошелька почти никогда не приводит к Telegram-аккаунту, поэтому
+контакт ищется по slug подарка (`t.me/nft/PlushPepe-727`): `services/owner_lookup.py` — dispatcher кладёт slug
+в Redis-очередь, воркер сервиса `resolver` (тот же Telethon-аккаунт) вызывает `payments.getUniqueStarGift` и
+возвращает владельца, если он не скрыл его в Telegram. Ответ кэшируется (1 ч; «скрыт» — 5 мин); если воркер не
+запущен (нет входа Telethon), уведомление не ждёт. В фильтре есть галочка «Только если можно написать владельцу»
+(включена по умолчанию): без контакта такой фильтр листинги и апгрейды не получает; «GIFT SOLD!» не зависит от неё.
+«АПГРЕЙД» отправляется, когда в коллекции после первого прохода скана появился новый предмет: для коллекций с
+фильтрами скан идёт каждый цикл, поэтому задержка — секунды-минуты (большие коллекции — дольше). Пачка новых
+предметов больше `UPGRADE_BURST_MAX` (20) за раз не рассылается (это сбой состояния, а не апгрейды).
+Источник mint-событий Tonviewer (`listener-ton`) отключён: его API недоступен.
+
 **Другие маркетплейсы.** Листинги on-chain маркетов (GetGems, Marketapp и др.) TonAPI отдаёт сам,
 имя маркета берётся из `sale.market.name`. Portals, Tonnel и MRKT публичного API не имеют: их
 внутренние API закрыты защитой от ботов (Tonnel — Cloudflare, MRKT — лимит «contact the support») и
@@ -223,6 +234,9 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 | `TONAPI_DISCOVERY_INTERVAL` | 3600 | период автообнаружения, с |
 | `TONAPI_DISCOVERY_PAGES` | 5 | страниц NFT минтера за один запуск автообнаружения |
 | `TONVIEWER_ENABLED` | false | включить `listener-ton` (Tonviewer API сейчас недоступен) |
+| `OWNER_LOOKUP_ENABLED` | true | поиск владельца подарка по slug через Telegram (нужен вход Telethon) |
+| `OWNER_LOOKUP_TIMEOUT` | 4 | сколько уведомление ждёт владельца, с |
+| `UPGRADE_BURST_MAX` | 20 | больше новых предметов за раз — апгрейды не рассылаются |
 | `SHOWCASE_CACHE_TTL` | 10 | кэш лёгкого списка коллекций в API, с (0 — выкл) |
 | `TG_MARKET_ENABLED` | true | листинги маркета подарков Telegram (сервис `resolver`, нужен вход Telethon) |
 | `TG_MARKET_INTERVAL` | 2 | пауза между запросами листингов к Telegram, с |
