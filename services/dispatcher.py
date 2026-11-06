@@ -70,6 +70,7 @@ from core.redis_client import (
     recent_sales_key,
 )
 from db.models import Attribute, Filter, User
+from services.feed import push_card
 from services.rate_limit import SendRateLimiter
 from services.user_settings import can_receive
 from services.owner_lookup import gift_slug, request_owner
@@ -115,6 +116,18 @@ def nft_url(addr: str | None = None, name: str | None = None) -> str | None:
     """Ссылка на подарок — только Telegram (t.me/nft/Slug-N); без номера в названии ссылки нет (сторонних сайтов не даём)."""
     slug = gift_slug(name)
     return f"https://t.me/nft/{slug}" if slug else None
+
+
+def _card(kind: str, title: str, attrs: dict[str, Any], price: float | None, market: str | None,
+          link: str | None, owner: dict[str, Any] | None) -> dict[str, Any]:
+    """Карточка сигнала для ленты мини-приложения (ТЗ 19.6)."""
+    return {
+        "kind": kind, "title": title, "price": price, "market": market, "link": link,
+        "attrs": {k: attrs.get(k) for k in ("model", "background", "symbol") if attrs.get(k)},
+        "owner": ({"username": owner.get("username"), "tg_user_id": owner.get("tg_user_id")}
+                  if owner and (owner.get("username") or owner.get("tg_user_id")) else None),
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
 
 
 def _linked(title: str, url: str | None, bold: bool = False) -> str:
@@ -277,6 +290,7 @@ class NotificationDispatcher:
         await self._send_to_subscribers(
             collection_id, metadata, text, keyboard, has_contact=_has_contact(owner), preview_url=tme,
             kind="upgrade", number=gift_number(name, slug),
+            card=_card("upgrade", name, metadata, None, "Telegram" if payload.get("source") == "telegram" else None, tme, owner),
         )
         self.stats["upgrades"] += 1
 
@@ -397,6 +411,7 @@ class NotificationDispatcher:
         await self._send_to_subscribers(
             collection_id, attributes, text, keyboard, has_contact=_has_contact(owner), preview_url=tme,
             kind="listing", number=gift_number(title, slug), price=float(price) if price else None,
+            card=_card("listing", title, attributes, float(price) if price else None, market_title(marketplace), tme or link, owner),
         )
         self.stats["listings"] += 1
 
@@ -410,6 +425,8 @@ class NotificationDispatcher:
         await self._send_to_subscribers(
             collection_id, payload.get("attributes") or {}, text, None,
             kind="sale", number=gift_number(payload.get("nft_name"), payload.get("slug")), price=price,
+            card=_card("sale", payload.get("nft_name") or "Gift", payload.get("attributes") or {}, price,
+                       market_title(payload.get("marketplace")), nft_url(payload.get("nft_address"), payload.get("nft_name")), None),
         )
         self.stats["sales"] += 1
 
@@ -532,6 +549,7 @@ class NotificationDispatcher:
         kind: str = "sale",
         number: int | None = None,
         price: float | None = None,
+        card: dict[str, Any] | None = None,
     ) -> None:
         """Находит подписчиков с подходящими фильтрами и шлёт им сообщение параллельно."""
         target_users, no_contact = await self._match_users(
@@ -551,7 +569,7 @@ class NotificationDispatcher:
         # Превью ссылки: карточка подарка Telegram (t.me/nft/…) с картинкой, а не баннер маркетплейса
         preview = LinkPreviewOptions(url=preview_url, show_above_text=False) if preview_url \
             else LinkPreviewOptions(is_disabled=True)
-        tasks = [self._send_limited(uid, text, keyboard, preview) for uid in target_users]
+        tasks = [self._send_limited(uid, text, keyboard, preview, card) for uid in target_users]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for uid, res in zip(target_users, results, strict=True):
             if isinstance(res, Exception):
@@ -572,7 +590,7 @@ class NotificationDispatcher:
         except Exception:  # noqa: BLE001 — статистика не должна ломать доставку
             pass
 
-    async def _send_limited(self, uid: int, text: str, keyboard: Any, preview: Any) -> Any:
+    async def _send_limited(self, uid: int, text: str, keyboard: Any, preview: Any, card: dict[str, Any] | None = None) -> Any:
         """Отправка с лимитами (ТЗ 8.7): минутный лимит -> сводка «ещё N», 429 -> ждём retry_after, 403 -> не пишем."""
         from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
@@ -590,9 +608,15 @@ class NotificationDispatcher:
             )
         for attempt in (1, 2):
             try:
-                return await self.bot.send_message(
+                sent = await self.bot.send_message(
                     uid, text, parse_mode="HTML", reply_markup=keyboard, link_preview_options=preview
                 )
+                if card:  # лента сигналов в мини-приложении
+                    try:
+                        await push_card(self.redis, uid, card)
+                    except Exception as exc:  # noqa: BLE001 — лента не должна ломать доставку
+                        logger.debug(f"[feed] {exc!r}")
+                return sent
             except TelegramRetryAfter as exc:
                 if attempt == 2:
                     raise

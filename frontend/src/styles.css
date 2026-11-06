@@ -210,3 +210,26 @@ button.row-item { cursor: pointer; }
 /* источник флора на карточке */
 .ccard-floor .src { margin-left: 6px; padding: 1px 5px; border-radius: 5px; font-size: 10px; font-weight: 700;
   vertical-align: middle; color: #1c1a10; background: var(--gold); }
+
+/* ===== Лента сигналов ===== */
+.signal { background: var(--card); border-radius: var(--radius); padding: 12px; margin-bottom: 10px; box-shadow: var(--shadow);
+  border-left: 3px solid var(--line); }
+.signal.upgrade { border-left-color: #4aa3ff; }
+.signal.listing { border-left-color: var(--up); }
+.signal.sale { border-left-color: var(--gold); }
+.signal-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.signal-title { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.signal-price { color: var(--up); font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.signal-attrs { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
+.signal-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { padding: 2px 8px; border-radius: 999px; background: #2b3a4c; color: #c4cdd8; font-size: 12px; }
+.tag-upgrade { background: rgba(74, 163, 255, .16); color: #4aa3ff; }
+.tag-listing { background: rgba(79, 174, 79, .16); color: var(--up); }
+.tag-sale { background: rgba(226, 201, 106, .16); color: var(--gold); }
+.tag-time { background: none; color: var(--muted); }
+.signal-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; }
+.btn-link { display: block; text-align: center; padding: 9px 10px; border-radius: 10px; background: #2b3a4c; color: #fff;
+  text-decoration: none; font-size: 14px; }
+.btn-link.primary { background: var(--accent); }
+.btn-link:active { transform: scale(.97); }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
