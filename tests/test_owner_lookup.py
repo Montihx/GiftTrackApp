@@ -187,3 +187,25 @@ async def test_price_range_applies_to_sales(session: Any) -> None:
     bot.send_message.reset_mock()
     await d.process_sale({**sale, "price_ton": 250.0})
     assert sorted(c[0][0] for c in bot.send_message.call_args_list) == [61, 62]
+
+
+async def test_event_without_matching_filter_skips_owner_lookup(session: Any) -> None:
+    from services.dispatcher import NotificationDispatcher
+
+    coll = Collection(name="Plush Pepe", contract_address="EQprecheck_a", source="seed")
+    other = Collection(name="Scared Cat", contract_address="EQprecheck_b", source="seed")
+    session.add_all([coll, other, User(tg_id=71)])
+    await session.flush()
+    session.add(Filter(user_id=71, collection_id=other.id, is_active=True, require_owner=False))  # подписан на другую
+    await session.commit()
+    bot, redis, resolver = AsyncMock(), AsyncMock(), AsyncMock()
+    redis.get = AsyncMock(return_value=b"1")  # воркер владельцев «жив»: без предпроверки событие бы ждало ответ
+    d = NotificationDispatcher(bot=bot, session=session, redis=redis, resolver=resolver)
+    await d.process_listing({"collection_id": str(coll.id), "marketplace": "getgems", "nft_name": "Plush Pepe #5",
+                             "nft_index": 5, "price_ton": 10, "seller_ton": "0:seller", "attributes": {}})
+    await d.process_upgrade({"collection_id": str(coll.id), "nft_address": "0:n", "index": 5, "owner_ton": "0:o",
+                             "metadata": {"name": "Plush Pepe #5"}})
+    resolver.resolve.assert_not_awaited()  # адрес продавца не резолвим
+    redis.lpush.assert_not_awaited()  # и воркер Telegram не просим
+    bot.send_message.assert_not_awaited()
+    assert d.stats["listings"] == 1 and d.stats["upgrades"] == 1
