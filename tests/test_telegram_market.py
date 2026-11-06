@@ -70,6 +70,10 @@ class FakeClient:
             gift = types.StarGift(id=5555, sticker=types.DocumentEmpty(id=0), stars=100, convert_stars=80,
                                   title="Plush Pepe", resell_min_stars=1200, availability_resale=321)
             return types.payments.StarGifts(hash=1, gifts=[gift], chats=[], users=[])
+        if isinstance(request, functions.payments.GetUniqueStarGiftRequest):
+            num = int(request.slug.rsplit("-", 1)[1])
+            return types.payments.UniqueStarGift(gift=unique(num, owner=888), chats=[],
+                                                 users=[types.User(id=888, username="hidden_in_list")])
         if isinstance(request, functions.payments.GetResaleStarGiftsRequest):
             users = [types.User(id=777, username="seller777")]
             return types.payments.ResaleStarGifts(count=len(self.resale), gifts=self.resale, chats=[], users=users)
@@ -138,3 +142,56 @@ async def test_dispatcher_telegram_listing_uses_owner_account(session: Any) -> N
     text, kwargs = bot.send_message.call_args[0][1], bot.send_message.call_args[1]
     assert "Telegram Market" in text and "⭐ 15 000" in text and "t.me/nft/PlushPepe-3" in text and "@seller777" in text
     assert kwargs["reply_markup"] is not None  # «Написать владельцу»
+
+
+async def test_owner_missing_in_list_is_enriched_by_slug(session: Any) -> None:
+    coll = Collection(name="Plush Pepe", contract_address="EQenrich_tgm", source="seed")
+    session.add(coll)
+    await session.commit()
+
+    @asynccontextmanager
+    async def scope() -> Any:
+        yield session
+
+    redis, client = FakeRedis(), FakeClient()
+    w = TelegramMarketWatcher(client, redis, scope, Settings())
+    await w.refresh_catalog()
+    client.resale = [unique(1)]
+    await w.poll_collection(coll.id)  # bootstrap
+    client.resale = [unique(1), unique(9, owner=None)]  # в списке владелец не указан
+    assert await w.poll_collection(coll.id) == 1
+    ev = orjson.loads(redis.stream[-1][1]["data"])
+    assert ev["seller_tg_id"] == 888 and ev["seller_username"] == "hidden_in_list"
+    assert any(isinstance(r, functions.payments.GetUniqueStarGiftRequest) for r in client.requests)
+
+
+def test_channel_owner() -> None:
+    g = unique(5, owner=None)
+    g.owner_id = types.PeerChannel(channel_id=42)
+    chat = types.Channel(id=42, title="Gift Shop", photo=types.ChatPhotoEmpty(), date=None, username="giftshop")
+    item = parse_resale_gift(g, {}, {42: chat})
+    assert item is not None and item["seller_username"] == "giftshop" and item["seller_name"] == "Gift Shop"
+
+
+async def test_dispatcher_hidden_owner_and_buttons(session: Any) -> None:
+    from unittest.mock import AsyncMock
+
+    from services.dispatcher import NotificationDispatcher
+
+    coll = Collection(name="Plush Pepe", contract_address="EQhidden_disp", source="seed")
+    session.add_all([coll, User(tg_id=6)])
+    await session.flush()
+    session.add(Filter(user_id=6, collection_id=coll.id, is_active=True))
+    await session.commit()
+    bot, redis = AsyncMock(), AsyncMock()
+    redis.get = AsyncMock(return_value=None)
+    d = NotificationDispatcher(bot=bot, session=session, redis=redis, resolver=AsyncMock())
+    base = {"collection_id": str(coll.id), "marketplace": "telegram", "nft_name": "Plush Pepe #4", "nft_index": 4,
+            "price_ton": 10, "seller_ton": "", "link": "https://t.me/nft/PlushPepe-4", "attributes": {}}
+    await d.process_listing({**base, "seller_tg_id": None, "seller_username": None, "seller_name": None})
+    text, kb = bot.send_message.call_args[0][1], bot.send_message.call_args[1]["reply_markup"]
+    assert "скрыт настройками приватности" in text
+    assert [b.text for row in kb.inline_keyboard for b in row] == ["🎁 Открыть подарок"]
+    await d.process_listing({**base, "seller_tg_id": 5, "seller_username": "vasya", "seller_name": "Vasya"})
+    kb = bot.send_message.call_args[1]["reply_markup"]
+    assert kb.inline_keyboard[0][0].url == "https://t.me/vasya" and kb.inline_keyboard[1][0].text == "🎁 Открыть подарок"

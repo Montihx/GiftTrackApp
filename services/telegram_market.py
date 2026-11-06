@@ -41,7 +41,7 @@ def norm_title(name: str) -> str:
     return " ".join(name.replace("’", "'").replace("`", "'").lower().split())
 
 
-def parse_resale_gift(gift: Any, users: dict[int, Any]) -> dict[str, Any] | None:
+def parse_resale_gift(gift: Any, users: dict[int, Any], chats: dict[int, Any] | None = None) -> dict[str, Any] | None:
     """StarGiftUnique -> словарь листинга (None для не-уникальных подарков)."""
     from telethon.tl import types
 
@@ -61,13 +61,27 @@ def parse_resale_gift(gift: Any, users: dict[int, Any]) -> dict[str, Any] | None
             ton = amount.amount / NANO
         elif isinstance(amount, types.StarsAmount):
             stars = amount.amount
-    owner_id = gift.owner_id.user_id if isinstance(gift.owner_id, types.PeerUser) else None
-    user = users.get(owner_id) if owner_id else None
+    owner_id = username = None
+    name = getattr(gift, "owner_name", None)
+    if isinstance(gift.owner_id, types.PeerUser):
+        owner_id = gift.owner_id.user_id
+        user = users.get(owner_id)
+        username = getattr(user, "username", None)
+        if user is not None and not name:
+            name = " ".join(x for x in (getattr(user, "first_name", None), getattr(user, "last_name", None)) if x) or None
+    elif isinstance(gift.owner_id, types.PeerChannel):  # владелец — канал: пишем через его @username
+        chat = (chats or {}).get(gift.owner_id.channel_id)
+        username = getattr(chat, "username", None)
+        name = name or getattr(chat, "title", None)
     return {
         "slug": gift.slug, "num": gift.num, "title": gift.title, "attributes": attrs,
         "price_stars": stars, "price_ton": ton, "seller_tg_id": owner_id,
-        "seller_username": getattr(user, "username", None), "gift_address": gift.gift_address,
+        "seller_username": username, "seller_name": name, "gift_address": gift.gift_address,
     }
+
+
+def has_owner(item: dict[str, Any]) -> bool:
+    return bool(item["seller_tg_id"] or item["seller_username"])
 
 
 def seen_key(item: dict[str, Any]) -> str:
@@ -158,7 +172,8 @@ class TelegramMarketWatcher:
             return 0
         self.stats["polls"] += 1
         users = {u.id: u for u in getattr(res, "users", None) or []}
-        items = [i for i in (parse_resale_gift(g, users) for g in getattr(res, "gifts", None) or []) if i]
+        chats = {c.id: c for c in getattr(res, "chats", None) or []}
+        items = [i for i in (parse_resale_gift(g, users, chats) for g in getattr(res, "gifts", None) or []) if i]
         key = SEEN_KEY.format(cid=cid)
         bootstrap = not await self.redis.exists(key)
         new = [i for i in items if not await self.redis.sismember(key, seen_key(i))]
@@ -168,6 +183,9 @@ class TelegramMarketWatcher:
         if bootstrap:
             return 0
         name, address = self.collections[cid]
+        # В общем списке Telegram не всегда отдаёт владельца — дозапрашиваем подарок по slug (только новые)
+        for i in [i for i in new if not has_owner(i)][:5]:
+            await self._enrich_owner(i)
         for i in new:
             await stream_publish(self.redis, STREAM_NFT_LISTINGS, {
                 "type": "listing", "marketplace": "telegram", "collection_id": str(cid),
@@ -175,6 +193,7 @@ class TelegramMarketWatcher:
                 "nft_index": i["num"], "nft_name": f"{i['title'] or name} #{i['num']}",
                 "price_ton": i["price_ton"], "price_stars": i["price_stars"],
                 "seller_ton": "", "seller_tg_id": i["seller_tg_id"], "seller_username": i["seller_username"],
+                "seller_name": i["seller_name"],
                 "attributes": i["attributes"], "link": f"https://t.me/nft/{i['slug']}",
                 "listed_at": now.isoformat(), "tx_hash": None,
             })
@@ -182,6 +201,23 @@ class TelegramMarketWatcher:
         if new:
             logger.info(f"[tg_market] {name}: новых листингов {len(new)}")
         return len(new)
+
+    async def _enrich_owner(self, item: dict[str, Any]) -> None:
+        from telethon.tl import functions
+
+        try:
+            res = await self._call(functions.payments.GetUniqueStarGiftRequest(slug=item["slug"]))
+        except Exception as exc:  # noqa: BLE001 — не критично: уведомление уйдёт без владельца
+            logger.debug(f"[tg_market] владелец {item['slug']}: {exc!r}")
+            return
+        if res is None:
+            return
+        users = {u.id: u for u in getattr(res, "users", None) or []}
+        chats = {c.id: c for c in getattr(res, "chats", None) or []}
+        full = parse_resale_gift(res.gift, users, chats)
+        if full is not None:
+            for k in ("seller_tg_id", "seller_username", "seller_name"):
+                item[k] = item[k] or full[k]
 
     async def run(self, stop_event: asyncio.Event) -> None:
         logger.info("[tg_market] старт наблюдения за маркетом подарков Telegram")

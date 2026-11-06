@@ -212,8 +212,9 @@ class NotificationDispatcher:
                 pass
 
         # Продавец: маркет Telegram сразу даёт аккаунт владельца, иначе — резолвим TON-адрес
-        if payload.get("seller_tg_id"):
-            owner = {"tg_user_id": payload["seller_tg_id"], "username": payload.get("seller_username")}
+        if marketplace == "telegram":
+            owner = {"tg_user_id": payload.get("seller_tg_id"), "username": payload.get("seller_username"),
+                     "name": payload.get("seller_name")}
         else:
             owner = await self.resolver.resolve(seller_ton) if seller_ton else {}
         owner_link = self._owner_link(owner, seller_ton)
@@ -293,7 +294,7 @@ class NotificationDispatcher:
                 )
 
         text = "\n".join(lines)
-        keyboard = self._owner_keyboard(owner)
+        keyboard = self._owner_keyboard(owner, gift_link=link)
 
         await self._send_to_subscribers(collection_id, attributes, text, keyboard)
         self.stats["listings"] += 1
@@ -395,24 +396,25 @@ class NotificationDispatcher:
         """Формирует ссылку на владельца: @username или tg://user?id= или TON-адрес."""
         if owner.get("username"):
             return f"@{owner['username']}"
+        label = owner.get("name") or "пользователь"
         if owner.get("tg_user_id"):
-            return f"<a href='tg://user?id={owner['tg_user_id']}'>пользователь</a>"
-        return f"<code>{fallback_ton[:16]}…</code>"
+            return f"<a href='tg://user?id={owner['tg_user_id']}'>{label}</a>"
+        if owner.get("name"):
+            return f"{owner['name']} (контакт скрыт)"
+        if fallback_ton:
+            return f"<code>{fallback_ton[:16]}…</code>"
+        return "скрыт настройками приватности"
 
-    def _owner_keyboard(self, owner: dict[str, Any]) -> InlineKeyboardMarkup | None:
-        """Кнопка 'Написать владельцу' если есть tg_user_id."""
-        if owner.get("tg_user_id"):
-            return InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="💬 Написать владельцу",
-                            url=f"tg://user?id={owner['tg_user_id']}",
-                        )
-                    ]
-                ]
-            )
-        return None
+    def _owner_keyboard(self, owner: dict[str, Any], gift_link: str | None = None) -> InlineKeyboardMarkup | None:
+        """«Написать владельцу» (t.me/username или tg://user?id=) и «Открыть подарок»."""
+        rows: list[list[InlineKeyboardButton]] = []
+        if owner.get("username"):
+            rows.append([InlineKeyboardButton(text="💬 Написать владельцу", url=f"https://t.me/{owner['username']}")])
+        elif owner.get("tg_user_id"):
+            rows.append([InlineKeyboardButton(text="💬 Написать владельцу", url=f"tg://user?id={owner['tg_user_id']}")])
+        if gift_link and gift_link.startswith("https://t.me/"):
+            rows.append([InlineKeyboardButton(text="🎁 Открыть подарок", url=gift_link)])
+        return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
     async def _rarity_and_supply_lines(
         self, collection_id: Any, attributes: dict[str, Any]
