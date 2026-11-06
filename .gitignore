@@ -10,3 +10,4 @@ frontend/dist/
 .venv/
 docker-compose.override.yml
 *.egg-info/
+*.bak

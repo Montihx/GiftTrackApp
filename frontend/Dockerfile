@@ -5,6 +5,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --no-audit --no-fund
 COPY . .
+ARG VITE_OWNER_USERNAME=""
+ENV VITE_OWNER_USERNAME=$VITE_OWNER_USERNAME
 RUN npm run build
 
 FROM nginx:alpine

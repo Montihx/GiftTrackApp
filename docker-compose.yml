@@ -121,7 +121,11 @@ services:
       retries: 6
 
   twa-frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        # username для «Написать владельцу» на экране подписки (берётся из .env)
+        VITE_OWNER_USERNAME: ${VITE_OWNER_USERNAME:-}
     restart: unless-stopped
     ports:
       - "127.0.0.1:3001:80"
