@@ -25,10 +25,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user_init_data
-from core.config import get_settings
-from core.redis_client import cache_get_json, collection_attrs_key, floor_key
+from core.redis_client import cache_get_json, floor_key
 from db.engine import session_scope
-from db.models import Attribute, Collection, Filter
+from db.models import Collection, Filter
 
 router = APIRouter(prefix="/api", tags=["twa"])
 async def get_session() -> AsyncIterator[AsyncSession]:
@@ -57,8 +56,8 @@ def _parse_user_id(init_data: dict[str, Any]) -> int:
     try:
         user = orjson.loads(user_raw)
         return int(user["id"])
-    except (ValueError, KeyError):
-        raise HTTPException(status_code=401, detail="Bad user payload")
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(status_code=401, detail="Bad user payload") from None
 
 
 @router.get("/filters")

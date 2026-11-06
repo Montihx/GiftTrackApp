@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 

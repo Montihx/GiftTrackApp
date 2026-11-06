@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import datetime as dt
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
-from services.ton.events import BlockEvents, MintEvent, TransferEvent
+from services.ton.events import MintEvent, TransferEvent
 from services.ton.parsing import parse_tonviewer_transactions
 from services.ton.state import TonState
 
@@ -235,7 +235,6 @@ async def test_listener_process_collection(session):
     """Интеграционный тест: обработка одной коллекции с моками HTTP."""
     from services.ton.listener import TonListener
     from db.models import Collection
-    from core.config import get_settings
 
     # Создаём тестовую коллекцию
     coll = Collection(

@@ -1,10 +1,12 @@
 # /workspace/services/market/listener.py — поллинг маркетплейсов на новые листинги
 """
-MarketListener: мониторинг новых листингов через REST API маркетплейсов.
+MarketListener: мониторинг новых листингов.
 
-Поллинг каждые settings.market_poll_interval секунд (по умолчанию 5 сек).
+С TONAPI_KEY цикл делегируется TonApiSync (services/tonapi_sync.py, каждые tonapi_poll_interval):
+листинги, продажи, floors по снимкам items. Без ключа — поллинг GetGems каждые
+settings.market_poll_interval секунд (по умолчанию 5 сек).
 
-GetGems GraphQL (основной):
+GetGems GraphQL (без ключа TonAPI):
     POST https://api.getgems.io/graphql
     query RecentListings($address: Address!, $limit: Int!) {
       nftItems(input: {
@@ -103,7 +105,7 @@ class MarketListener:
         self.settings = settings or get_settings()
         self._rate = asyncio.Semaphore(self.settings.api_max_concurrency)
         self.stats = {"listings": 0, "errors": 0, "empty": 0}
-        # TonAPI primary при наличии ключа (A9): снимки items вместо GetGems, опрос каждые tonapi_poll_interval
+        # TonAPI primary при наличии ключа: снимки items вместо GetGems, опрос каждые tonapi_poll_interval
         self._tonapi_sync = TonApiSync(session, redis, self.settings) if self.settings.tonapi_enabled else None
 
     async def process_collections(self) -> None:

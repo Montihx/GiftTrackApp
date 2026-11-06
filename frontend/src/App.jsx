@@ -13,7 +13,7 @@ const EMPTY_FORM = {
 };
 
 // Выпадающий список с поиском по буквам (без сторонних UI-библиотек)
-export function SearchSelect({ label, placeholder, anyLabel, options, value, onChange, renderIcon }) {
+function SearchSelect({ label, placeholder, anyLabel, options, value, onChange, renderIcon }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const boxRef = useRef(null);

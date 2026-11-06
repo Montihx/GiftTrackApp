@@ -38,7 +38,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings, get_settings
 from core.redis_client import cache_get_json, cache_set_json, wallet_key
-from core.retry import with_retry
 from db.models import WalletTgMap
 from services.collection_discovery import _http_request
 

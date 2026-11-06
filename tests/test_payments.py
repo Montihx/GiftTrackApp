@@ -16,7 +16,7 @@ async def test_activate_subscription_new_user(session):
 
     from db.models import User
 
-    expiry = await activate_subscription(session, 111, 30)
+    await activate_subscription(session, 111, 30)
     await session.commit()
     user = (await session.execute(select(User).where(User.tg_id == 111))).scalar_one()
     assert user.sub_plan == "premium"
@@ -29,7 +29,6 @@ async def test_activate_subscription_new_user(session):
 @pytest.mark.asyncio
 async def test_activate_subscription_extends_active(session):
     """Активная подписка продлевается от конца текущей."""
-    from sqlalchemy import select
 
     from db.models import User
 

@@ -52,7 +52,7 @@ from typing import Any
 import aiohttp
 import orjson
 from loguru import logger
-from sqlalchemy import Text, func, select
+from sqlalchemy import func, select
 from sqlalchemy import update as pg_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession

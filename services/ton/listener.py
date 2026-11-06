@@ -30,7 +30,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import aiohttp
 import orjson
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +39,6 @@ from core.redis_client import STREAM_NFT_UPGRADES, cache_get_json, cache_set_jso
 from core.retry import with_retry
 from services.collection_discovery import _http_request
 from services.ton.events import (
-    BlockEvents,
     MintEvent,
     TransferEvent,
     mint_to_stream_payload,

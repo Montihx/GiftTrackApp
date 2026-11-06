@@ -14,15 +14,12 @@ from decimal import Decimal
 from typing import Any
 
 import orjson
-import pytest
 from sqlalchemy import func, select
 
 from core.config import Settings
 from core.redis_client import floor_key, recent_sales_key
 from db.models import Attribute, Collection, ModelSale
 from services.updater import FloorAndSalesUpdater
-
-pytestmark = pytest.mark.asyncio
 
 
 class FakeRedis:

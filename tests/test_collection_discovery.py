@@ -20,7 +20,6 @@ from unittest.mock import patch
 
 import aiohttp
 import orjson
-import pytest
 from sqlalchemy import func, select
 
 from core.config import TRAIT_ALIASES, map_trait_type
