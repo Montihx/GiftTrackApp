@@ -52,24 +52,39 @@ def parse_ton_price(sale: dict[str, Any] | None) -> Decimal | None:
 
 
 class RateLimiter:
-    """Минимальный интервал между запросами (общий на процесс): rps<=0 — без ограничения."""
+    """Минимальный интервал между запросами (общий на процесс): rps<=0 — без ограничения.
+
+    high=True — приоритет (события реального времени из потока): пока такой запрос ждёт,
+    обычные (полный скан) слот не получают, поэтому скан не задерживает уведомления.
+    """
 
     def __init__(self, rps: float) -> None:
         self.interval = 1.0 / rps if rps > 0 else 0.0
         self._lock = asyncio.Lock()
         self._next = 0.0
+        self._high_waiting = 0
 
-    async def acquire(self) -> None:
+    async def acquire(self, high: bool = False) -> None:
         if self.interval <= 0:
             return
-        async with self._lock:
-            loop = asyncio.get_running_loop()
-            now = loop.time()
-            wait = self._next - now
-            if wait > 0:
-                await asyncio.sleep(wait)
-                now += wait
-            self._next = now + self.interval
+        loop = asyncio.get_running_loop()
+        if high:
+            self._high_waiting += 1
+        try:
+            while True:
+                async with self._lock:
+                    if high or self._high_waiting == 0:
+                        now = loop.time()
+                        wait = self._next - now
+                        if wait <= 0:
+                            self._next = now + self.interval
+                            return
+                    else:
+                        wait = 0.05  # уступаем приоритетному запросу
+                await asyncio.sleep(max(wait, 0.005))
+        finally:
+            if high:
+                self._high_waiting -= 1
 
 
 _LIMITERS: dict[float, RateLimiter] = {}
@@ -93,10 +108,11 @@ class TonApiClient:
     def enabled(self) -> bool:
         return self.settings.tonapi_enabled
 
-    async def _get(self, path: str, params: dict[str, str] | None = None, context: str = "") -> Any:
+    async def _get(self, path: str, params: dict[str, str] | None = None, context: str = "",
+                   high: bool = False) -> Any:
         url = f"{self.settings.tonapi_url.rstrip('/')}{path}"
         headers = {"Authorization": f"Bearer {self.settings.tonapi_key}"}
-        await self._limiter.acquire()
+        await self._limiter.acquire(high=high)
         raw = await _http_request(self._rate, "GET", url, params=params, headers=headers,
                                   context=f"tonapi:{context or path}")
         return orjson.loads(raw)
@@ -109,6 +125,10 @@ class TonApiClient:
             context=f"items[{address[:8]}…@{offset}]",
         )
         return (page or {}).get("nft_items") or []
+
+    async def fetch_nft(self, address: str) -> dict[str, Any]:
+        """Одно NFT (GET /v2/nfts/{address}): owner, sale, metadata, collection."""
+        return await self._get(f"/v2/nfts/{address}", context=f"nft[{address[:8]}…]", high=True) or {}
 
     async def fetch_account_nfts(self, account: str, offset: int, limit: int = PAGE_LIMIT) -> list[dict[str, Any]]:
         """NFT, которыми владеет аккаунт (GET /v2/accounts/{account}/nfts)."""

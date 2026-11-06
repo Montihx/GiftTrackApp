@@ -11,3 +11,5 @@ frontend/dist/
 docker-compose.override.yml
 *.egg-info/
 *.bak
+.env.bak*
+backups/

@@ -3,7 +3,8 @@
 Точка входа для сервиса resolver:
     python -m bot.resolver_main
 
-Запускает фоновый джоб обогащения кэша через Telethon (скан bio пользователей).
+Запускает фоновые джобы на Telethon-аккаунте: скан bio пользователей (резолвер владельцев)
+и наблюдение за маркетом подарков Telegram (services/telegram_market.py, TG_MARKET_ENABLED).
 Запускается только если API_ID / API_HASH / PHONE заданы в .env.
 """
 from __future__ import annotations
@@ -47,8 +48,13 @@ async def _telethon_worker(redis, stop_event: asyncio.Event) -> None:
 
     logger.info("Telethon worker запущен")
     scanner = BioScanner(client, redis, session_scope, settings)
+    jobs = [scanner.run(stop_event)]
+    if settings.tg_market_enabled:
+        from services.telegram_market import TelegramMarketWatcher
+
+        jobs.append(TelegramMarketWatcher(client, redis, session_scope, settings).run(stop_event))
     try:
-        await scanner.run(stop_event)
+        await asyncio.gather(*jobs)
     finally:
         await client.disconnect()
 
@@ -72,6 +78,53 @@ async def _login() -> None:
     await client.disconnect()
 
 
+async def _login_qr() -> None:
+    """Вход по QR-коду: код из Telegram никуда вводить не нужно.
+
+    Сервер печатает QR (и ссылку tg://login?token=…); отсканируйте его в Telegram на телефоне:
+    Настройки → Устройства → Подключить устройство. Если включён облачный пароль — спросит его.
+    """
+    from getpass import getpass
+
+    from telethon import errors
+
+    settings = get_settings()
+    client = _make_client(settings)
+    await client.connect()
+    if await client.is_user_authorized():
+        me = await client.get_me()
+        print(f"Уже авторизован как @{me.username or me.id}.")
+        await client.disconnect()
+        return
+    while True:
+        qr = await client.qr_login()
+        _print_qr(qr.url)
+        print("Отсканируйте QR в Telegram: Настройки → Устройства → Подключить устройство (ждём до 2 мин)")
+        try:
+            await qr.wait(timeout=120)
+            break
+        except asyncio.TimeoutError:
+            print("QR устарел — показываю новый.")
+        except errors.SessionPasswordNeededError:
+            await client.sign_in(password=getpass("Облачный пароль Telegram: "))
+            break
+    me = await client.get_me()
+    print(f"Авторизован как @{me.username or me.id}. Сессия сохранена.")
+    await client.disconnect()
+
+
+def _print_qr(url: str) -> None:
+    try:
+        import qrcode
+
+        q = qrcode.QRCode(border=1)
+        q.add_data(url)
+        q.print_ascii(invert=True)
+    except ImportError:
+        print("(для QR в терминале: pip install qrcode)")
+    print(url)
+
+
 async def _main() -> None:
     setup_logging(service_name="resolver")
     redis = create_redis()
@@ -91,4 +144,9 @@ async def _main() -> None:
 if __name__ == "__main__":
     import sys
 
-    asyncio.run(_login() if "--login" in sys.argv else _main())
+    if "--login-qr" in sys.argv:
+        asyncio.run(_login_qr())
+    elif "--login" in sys.argv:
+        asyncio.run(_login())
+    else:
+        asyncio.run(_main())

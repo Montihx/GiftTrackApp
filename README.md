@@ -30,12 +30,12 @@ Redis 7 · React 18 + Vite (TWA) · Docker Compose · Nginx · CryptoBot API
 core/       config, logging, redis, retry, graceful shutdown, ton_address
 db/         модели SQLAlchemy 2.0, Alembic-миграции (0001–0004), seed/gift_collections.json
 bot/        точки входа сервисов (bot/*_main.py), handlers, admin-команды
-services/   tonapi + tonapi_sync + gift_discovery (TonAPI), market/ (GetGems), ton/ (Tonviewer), updater, floors,
-            seed, showcase, dispatcher, resolver/, payments, collection_discovery
+services/   tonapi + tonapi_sync + tonapi_stream + gift_discovery (TonAPI), market/ (GetGems), ton/ (Tonviewer), updater, floors,
+            seed, showcase, dispatcher, resolver/, telegram_market, payments, collection_discovery
 api/        FastAPI: витрина (/api/collections, /api/items, /api/favorites, /api/subscription),
             фильтры (/api/filters), SSE, вебхук /api/payments/webhook/<secret>
 frontend/   React TWA (Vite, JSX, без роутера/UI-библиотек), Dockerfile + nginx.conf
-tests/      pytest (118 тестов, SQLite in-memory)
+tests/      pytest (130 тестов, SQLite in-memory)
 ```
 
 ## Быстрый старт
@@ -49,6 +49,16 @@ COMPOSE_PARALLEL_LIMIT=1 docker compose build
 docker compose up -d
 docker compose ps
 docker compose logs -f bot
+```
+
+**Обновление уже работающего сервера** (подходит и для очень старой версии; данные в docker-томах
+сохраняются) — одной командой (бэкап `.env` и базы, проверка локальных правок, `git pull`, новые настройки в
+`.env` без изменения старых, запрос недостающих ключей со скрытым вводом, сборка, запуск, вход Telegram
+по QR, проверка логов):
+
+```bash
+cd ~/gifts/GiftTrackApp
+git fetch origin main && git show origin/main:scripts/update_server.sh > /tmp/gt_update.sh && bash /tmp/gt_update.sh
 ```
 
 `migrate` отрабатывает автоматически, остальные сервисы ждут его завершения.
@@ -99,6 +109,9 @@ Telegram открывает TWA только по HTTPS; адрес задаёт
 аккаунт, не основной), затем один раз войдите (код из Telegram):
 
 ```bash
+# вход по QR (код вводить не нужно): Telegram → Настройки → Устройства → Подключить устройство
+docker compose run --rm -it resolver python -m bot.resolver_main --login-qr
+# или по коду из Telegram:
 docker compose run --rm -it resolver python -m bot.resolver_main --login
 docker compose restart resolver
 ```
@@ -128,6 +141,18 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 начинает сканировать в том же цикле, она сразу появляется на витрине и в форме фильтров.
 Выключить: `TONAPI_DISCOVERY_ENABLED=false` (останется seed-каталог).
 
+**Реальное время — поток переводов NFT (нужен `TONAPI_KEY`, хватает free-тарифа).**
+`services/tonapi_stream.py` держит SSE-соединение `GET /v2/sse/accounts/transactions?accounts=ALL&operations=0x5fcc3d14`
+— каждую финализированную транзакцию «перевод NFT» по всей сети TON. Листинг, продажа, снятие с продажи и
+перевод — это всё переводы NFT. Адрес проверяется по `processed_nfts` локально (чужие NFT отбрасываются без
+запросов к API); для наших подарков через `TONAPI_STREAM_DELAY` (2 с) делается один `GET /v2/nfts/{addr}` →
+«ЛИСТИНГ» / «GIFT SOLD!» за секунды, флор коллекции и модели снижается сразу. Квоту почти не тратит: запрос —
+только на перевод нашего подарка. Запросы потока идут вне очереди: пока такой запрос ждёт, полный скан
+слот лимита не получает (`RateLimiter(high=True)`). Если индексатор TonAPI ещё не обновил подарок, он
+перепроверяется через `TONAPI_STREAM_RECHECK` (8 с). Штатные обрывы соединения сервером — переподключение
+сразу, с `Last-Event-ID`. При обрыве — переподключение с backoff; пропущенное догонит полный скан.
+Поток работает для коллекций, у которых завершён первый проход скана.
+
 **TonAPI (основной источник, нужен `TONAPI_KEY`)** — `services/tonapi_sync.py` в `listener-market`:
 постранично читает `GET /v2/nfts/collections/{addr}/items` и сравнивает с прошлым состоянием
 предмета (Redis-хэш на коллекцию):
@@ -154,18 +179,31 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 | seed, 21 коллекция | ~217 тыс. | ~65 | ~1 мин | ~12 мин (Homemade Cake, 34k) |
 | с автообнаружением, ~122 коллекции | ~1,5 млн | ~330 | ~5–6 мин | ~2 ч (Lol Pop, 70k) |
 
-То есть с автообнаружением на free-тарифе листинги мелких коллекций приходят с задержкой до ~6 мин,
-а floor крупных обновляется раз в ~2 ч. На платном тарифе поднимите `TONAPI_RPS` (на 10 RPS цикл
-~35 с, полный проход ~15 мин); либо выключите автообнаружение (`TONAPI_DISCOVERY_ENABLED=false`).
+Листинги и продажи приходят из потока за секунды на любом тарифе — скан нужен для floors, атрибутов
+и как страховка. Чтобы скан успевал на free-тарифе, «горячие» коллекции (на которые у пользователей есть
+фильтры или избранное) сканируются каждый цикл и первыми, остальные — раз в `TONAPI_COLD_EVERY` (3) цикла.
+Рост floor крупной коллекции (продан самый дешёвый лот) виден после её прохода: на free-тарифе — до ~2 ч,
+на Lite ($9.9, 10 RPS) — ~15 мин; снижение floor — сразу из потока. Тарифы: tonapi.io → Pricing.
 Ключ общий для `listener-market` и `twa-api` (цена предмета на витрине) — учитывайте это в `TONAPI_RPS`.
 
 **Без ключа** витрина показывает seed-каталог, floor «—», график — empty-state; `listener-market`
 работает через GetGems GraphQL, `updater` считает floors через GetGems.
 
+**Маркет подарков Telegram (официальный API, бесплатно; нужен Telethon-аккаунт резолвера).**
+`services/telegram_market.py` в сервисе `resolver`: раз в `TG_MARKET_CATALOG_INTERVAL` (5 мин)
+`payments.getStarGifts` — соответствие подарков Telegram нашим коллекциям и флор маркета в Stars с числом
+листингов (Redis `tg_market:floor:{cid}`) по всем коллекциям одним запросом; каждые `TG_MARKET_INTERVAL`
+(2 с) — `payments.getResaleStarGifts` по одной коллекции (новые сверху; сначала коллекции с фильтрами/
+избранным). Новый листинг или смена цены → «ЛИСТИНГ» с маркетом «Telegram Market», ценой в TON и/или ⭐ и
+ссылкой `t.me/nft/<slug>`; владелец берётся из Telegram — «Написать владельцу» работает без резолвера.
+Первый опрос коллекции — без уведомлений. FloodWait соблюдается. Вход аккаунта — см. «Telethon» выше;
+лучше отдельный аккаунт.
+
 **Другие маркетплейсы.** Листинги on-chain маркетов (GetGems, Marketapp и др.) TonAPI отдаёт сам,
-имя маркета берётся из `sale.market.name`. Portals, Tonnel и MRKT торгуют подарками внутри Telegram
-(off-chain) и публичного API не имеют — их внутренние API требуют авторизации Telegram-аккаунтом,
-поэтому они не подключены.
+имя маркета берётся из `sale.market.name`. Portals, Tonnel и MRKT публичного API не имеют: их
+внутренние API закрыты защитой от ботов (Tonnel — Cloudflare, MRKT — лимит «contact the support») и
+требуют входа аккаунтом в их мини-приложения. Обходить защиту чужих сервисов мы не будем, поэтому они не
+подключены; офчейн-рынок покрывает официальный маркет Telegram.
 
 ## Переменные окружения (дополнительно к `.env.example`)
 
@@ -175,10 +213,18 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 | `TONAPI_POLL_INTERVAL` | 15 | пауза между циклами TonAPI-синхронизации, с |
 | `TONAPI_RPS` | 1 | лимит запросов к TonAPI на процесс |
 | `TONAPI_PAGES_PER_CYCLE` | 3 | страниц по 1000 items на коллекцию за цикл |
+| `TONAPI_STREAM_ENABLED` | true | события в реальном времени из SSE-потока переводов NFT |
+| `TONAPI_STREAM_DELAY` | 2 | пауза перед запросом NFT после события (индексатор TonAPI), с |
+| `TONAPI_STREAM_RECHECK` | 8 | повторная проверка подарка, если индексатор TonAPI не успел, с (0 — выкл) |
+| `TONAPI_COLD_EVERY` | 3 | коллекции без фильтров/избранного сканируются раз в N циклов |
 | `TONAPI_DISCOVERY_ENABLED` | true | автодобавление новых коллекций Telegram Gifts |
 | `TONAPI_DISCOVERY_INTERVAL` | 3600 | период автообнаружения, с |
 | `TONAPI_DISCOVERY_PAGES` | 5 | страниц NFT минтера за один запуск автообнаружения |
 | `TONVIEWER_ENABLED` | false | включить `listener-ton` (Tonviewer API сейчас недоступен) |
+| `TG_MARKET_ENABLED` | true | листинги маркета подарков Telegram (сервис `resolver`, нужен вход Telethon) |
+| `TG_MARKET_INTERVAL` | 2 | пауза между запросами листингов к Telegram, с |
+| `TG_MARKET_CATALOG_INTERVAL` | 300 | обновление каталога и флоров маркета Telegram, с |
+| `CRYPTOBOT_API_URL` | `https://pay.crypt.bot/api` | для тестов — `https://testnet-pay.crypt.bot/api` (токен из @CryptoTestnetBot) |
 | `SUB_PRICE_USD_30/60/90` | 49 / 89 / 119 | цены тарифов, $ (инвойс CryptoBot в USD, оплата TON/USDT) |
 | `VITE_OWNER_USERNAME` | пусто | username владельца для «Не получается оплатить? → Написать владельцу» (build-arg фронтенда) |
 
@@ -191,7 +237,7 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 118 тестов
+pytest                          # 130 тестов
 python -m compileall -q core db services bot tests        # то же, что в CI
 cd frontend && npm install && npm run dev   # /api проксируется на localhost:8000
 ```
@@ -212,7 +258,13 @@ cd frontend && npm install && npm run dev   # /api проксируется на
 
 ## Ограничения
 
-- Время листинга/продажи — момент обнаружения (точность = длительность прохода коллекции).
+- Время листинга/продажи — момент обнаружения: из потока — секунды, если событие пропущено (обрыв потока) — до прохода коллекции.
+- Офчейн-листинги (подарок выставлен, но не выведен в блокчейн) поток не видит.
+- Новые контракты продажи Marketapp TonAPI пока не распознаёт (нет `sale`, владелец — контракт): такие
+  листинги без цены не объявляются, а их продажи видны как переводы. Getgems и старые контракты Marketapp
+  распознаются полностью. Снимок «нет листинга, владелец — контракт» не порождает событий (защита от
+  ложных «GIFT SOLD!»).
 - Portals, Tonnel, MRKT не подключены (нет публичного API, см. «Источники данных»).
+- Продажи на маркете Telegram не отслеживаются (листинг исчезает и при продаже, и при снятии — различить нельзя).
 - `listener-ton` выключен по умолчанию: API Tonviewer недоступен.
 - Отличия от ТЗ: фронтенд на JavaScript (JSX), а не TypeScript.

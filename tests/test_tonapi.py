@@ -57,3 +57,21 @@ async def test_fetch_items_page_params(monkeypatch: pytest.MonkeyPatch) -> None:
     assert await cl.fetch_items_page("EQx", 1000, limit=100) == []
     assert calls == [("/v2/nfts/collections/EQx/items", {"limit": "1000", "offset": "0"}),
                      ("/v2/nfts/collections/EQx/items", {"limit": "100", "offset": "1000"})]
+
+
+async def test_rate_limiter_high_priority_goes_first() -> None:
+    import asyncio
+
+    lim = tonapi.RateLimiter(rps=20)
+    order: list[str] = []
+    await lim.acquire()  # занять текущий слот
+
+    async def take(tag: str, high: bool) -> None:
+        await lim.acquire(high=high)
+        order.append(tag)
+
+    scan = [asyncio.create_task(take(f"scan{i}", False)) for i in range(3)]
+    await asyncio.sleep(0)
+    fast = asyncio.create_task(take("stream", True))
+    await asyncio.gather(*scan, fast)
+    assert order[0] == "stream"
