@@ -153,7 +153,11 @@ class OwnerLookupWorker:
         while not stop_event.is_set():
             await self.redis.set(ALIVE_KEY, b"1", ex=30)
             try:
-                item = await self.redis.brpop(QUEUE_KEY, timeout=5)
+                # без блокирующего BRPOP: он на общем пуле Redis давал network:TimeoutError — опрашиваем очередь сами
+                raw = await self.redis.rpop(QUEUE_KEY)
+                item = (QUEUE_KEY, raw) if raw is not None else None
+                if item is None:
+                    await asyncio.sleep(1.0)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
