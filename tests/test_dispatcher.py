@@ -294,7 +294,8 @@ async def test_listing_alert_uses_telegram_issued_valuation_preview_and_wallet_l
     kwargs = bot.send_message.call_args[1]
     assert "<b>2 825</b> NFT" in text and "2 483" not in text  # число улучшенных из Telegram, не on-chain
     assert "7 555 GRAM" in text and "Оценка Telegram: ≈ <b>3 801 GRAM</b>" in text and "Последняя продажа: 3 500 GRAM" in text
-    assert "https://tonviewer.com/0:a16b8d1f692dd9ab" in text
+    assert "tonviewer.com" not in text and "кошелёк <code>0:a16b8d1f…</code>" in text  # кошелёк текстом, без стороннего сайта
+    assert "getgems.io" not in text
     assert kwargs["link_preview_options"] == LinkPreviewOptions(url="https://t.me/nft/PlushPepe-727", show_above_text=False)
     assert [b.url for row in kwargs["reply_markup"].inline_keyboard for b in row] == ["https://t.me/nft/PlushPepe-727"]
 

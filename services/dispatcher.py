@@ -110,22 +110,15 @@ def _valuation_lines(info: dict[str, Any]) -> list[str]:
     return lines
 
 
-def nft_url(addr: str | None, name: str | None = None) -> str:
-    """Ссылка на подарок: страница Telegram (t.me/nft/Slug-N) — открывается всегда; иначе GetGems по user-friendly адресу.
-
-    Адрес из TonAPI приходит в raw-виде (0:abc…), а GetGems по нему показывает «Здесь ничего нет».
-    """
+def nft_url(addr: str | None = None, name: str | None = None) -> str | None:
+    """Ссылка на подарок — только Telegram (t.me/nft/Slug-N); без номера в названии ссылки нет (сторонних сайтов не даём)."""
     slug = gift_slug(name)
-    if slug:
-        return f"https://t.me/nft/{slug}"
-    addr = addr or ""
-    try:
-        from core.ton_address import normalize_ton_address
+    return f"https://t.me/nft/{slug}" if slug else None
 
-        addr = normalize_ton_address(addr) or addr
-    except Exception:  # noqa: BLE001
-        pass
-    return f"https://getgems.io/nft/{addr}"
+
+def _linked(title: str, url: str | None, bold: bool = False) -> str:
+    text = f"<b>{title}</b>" if bold else title
+    return f"<a href='{url}'>{text}</a>" if url else text
 
 
 def gift_number(name: str | None, slug: str | None = None) -> int | None:
@@ -174,7 +167,7 @@ def format_sale_message(payload: dict[str, Any]) -> str:
     attrs = payload.get("attributes") or {}
     name = payload.get("nft_name") or f"{payload.get('collection_name') or 'Gift'} #{payload.get('nft_index', '?')}"
     addr = payload.get("nft_address", "")
-    lines = ["💸 <b>GIFT SOLD!</b>", f"🎁 <a href='{nft_url(addr, name)}'><b>{name}</b></a>"]
+    lines = ["💸 <b>GIFT SOLD!</b>", f"🎁 {_linked(name, nft_url(addr, name), bold=True)}"]
     for key, label in (("model", "Model"), ("background", "Backdrop"), ("symbol", "Symbol")):
         if attrs.get(key):
             lines.append(f"{label}: {attrs[key]}")
@@ -276,7 +269,6 @@ class NotificationDispatcher:
         lines.extend(_valuation_lines(info))
         lines.append("")
         lines.append(f"👤 Владелец: {owner_link}")
-        lines.append(f"🔗 <a href='{nft_url(nft_address)}'>GetGems</a>")
 
         text = "\n".join(lines)
         keyboard = self._owner_keyboard(owner, gift_link=tme)
@@ -340,8 +332,9 @@ class NotificationDispatcher:
         # Формируем сообщение
         lines = ["✅ <b>ЛИСТИНГ</b>"]
         title = payload.get("nft_name") or f"#{payload.get('nft_index', '?')}"
-        link = payload.get("link") or nft_url(nft_address, payload.get("nft_name"))
-        lines.append(f"🎭 <a href='{link}'>{title}</a> на {market_title(marketplace)}")
+        link = payload.get("link") if str(payload.get("link") or "").startswith("https://t.me/") else None
+        link = link or nft_url(nft_address, payload.get("nft_name"))  # ссылки только на Telegram
+        lines.append(f"🎭 {_linked(title, link)} на {market_title(marketplace)}")
         stars = payload.get("price_stars")
         if price:
             lines.append(f"💰 <b>{_fmt_num(float(price))} {_coin()}</b>" + (f" · ⭐ {stars:,}".replace(",", " ") if stars else ""))
@@ -640,7 +633,7 @@ class NotificationDispatcher:
         if owner.get("name"):
             return f"{owner['name']} (контакт скрыт)"
         if fallback_ton:
-            return f"<a href='https://tonviewer.com/{fallback_ton}'>кошелёк <code>{fallback_ton[:10]}…</code></a>"
+            return f"кошелёк <code>{fallback_ton[:10]}…</code>"  # без ссылки на сторонний сайт
         return "скрыт настройками приватности"
 
     def _owner_keyboard(self, owner: dict[str, Any], gift_link: str | None = None) -> InlineKeyboardMarkup | None:
