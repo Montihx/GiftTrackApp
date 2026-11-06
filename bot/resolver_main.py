@@ -69,6 +69,11 @@ async def _telethon_worker(redis, stop_event: asyncio.Event) -> None:
 
         floors = MarketFloorWatcher(client, redis, session_scope, settings)
         jobs.append(_supervise("market_floors", lambda: floors.run(stop_event), stop_event))
+        if settings.market_listings_enabled:
+            from services.market_listings import MarketListingWatcher
+
+            listings = MarketListingWatcher(floors, redis, session_scope, settings)
+            jobs.append(_supervise("market_listings", lambda: listings.run(stop_event), stop_event))
     try:
         await asyncio.gather(*jobs)
     finally:

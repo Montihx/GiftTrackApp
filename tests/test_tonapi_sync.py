@@ -175,13 +175,13 @@ async def _setup(session: Any) -> tuple[Collection, FakeRedis, FakeClient, TonAp
     session.add(coll)
     await session.commit()
     redis, client = FakeRedis(), FakeClient()
-    return coll, redis, client, TonApiSync(session, redis, Settings(tonapi_key="k"), client=client)  # type: ignore[arg-type]
+    return coll, redis, client, TonApiSync(session, redis, Settings(onchain_listings_enabled=True, onchain_upgrades_enabled=True, tonapi_key="k"), client=client)  # type: ignore[arg-type]
 
 
 async def _setup_paged(session: Any) -> tuple[Collection, FakeRedis, FakeClient, TonApiSync]:
     """page_limit=2, 1 страница за цикл: коллекция из 5 items проходится за 3 цикла."""
     coll, redis, client, _ = await _setup(session)
-    sync = TonApiSync(session, redis, Settings(tonapi_key="k", tonapi_pages_per_cycle=1),  # type: ignore[arg-type]
+    sync = TonApiSync(session, redis, Settings(onchain_listings_enabled=True, onchain_upgrades_enabled=True, tonapi_key="k", tonapi_pages_per_cycle=1),  # type: ignore[arg-type]
                       client=client, page_limit=2)  # type: ignore[arg-type]
     return coll, redis, client, sync
 
@@ -278,7 +278,7 @@ async def test_market_listener_uses_tonapi_when_key_set(session: Any) -> None:
     session.add_all([Collection(name="Teddy", contract_address=ADDR, source="seed"),
                      Collection(name="Placeholder", contract_address="tg_gift:x", source="seed")])
     await session.commit()
-    listener = MarketListener(session=session, redis=FakeRedis(), settings=Settings(tonapi_key="k"))
+    listener = MarketListener(session=session, redis=FakeRedis(), settings=Settings(onchain_listings_enabled=True, onchain_upgrades_enabled=True, tonapi_key="k"))
     assert listener._tonapi_sync is not None
     fake = FakeClient()
     fake.items = [raw_item("0:a", 1, "0:o1")]  # плейсхолдер tg_gift:x пропускается
@@ -288,7 +288,7 @@ async def test_market_listener_uses_tonapi_when_key_set(session: Any) -> None:
 
 
 def test_market_listener_without_key_keeps_getgems() -> None:
-    listener = MarketListener(session=None, redis=None, settings=Settings(tonapi_key=""))  # type: ignore[arg-type]
+    listener = MarketListener(session=None, redis=None, settings=Settings(onchain_listings_enabled=True, onchain_upgrades_enabled=True, tonapi_key=""))  # type: ignore[arg-type]
     assert listener._tonapi_sync is None
 
 
@@ -369,7 +369,7 @@ async def test_stream_handle_data_and_process(session: Any) -> None:
             return _api_nft(raw_item("0:b", 2, "0:o2", price=60))
 
     sync.client = Client()  # type: ignore[assignment]
-    stream = TonApiStream(sync, Settings(tonapi_key="k", tonapi_stream_delay=0))
+    stream = TonApiStream(sync, Settings(onchain_listings_enabled=True, onchain_upgrades_enabled=True, tonapi_key="k", tonapi_stream_delay=0))
     stream.handle_data('{"account_id":"0:B","lt":1,"tx_hash":"h"}')
     stream.handle_data('{"account_id":"0:b","lt":2,"tx_hash":"h2"}')  # дубль в очереди
     stream.handle_data('{"account_id":"0:unknown"}')
@@ -389,7 +389,7 @@ async def test_hot_collections_scanned_every_cycle_cold_every_nth(session: Any) 
     await session.flush()
     session.add(Filter(user_id=1, collection_id=hot.id, is_active=True))
     await session.commit()
-    sync = TonApiSync(session, FakeRedis(), Settings(tonapi_key="k", tonapi_cold_every=3,  # type: ignore[arg-type]
+    sync = TonApiSync(session, FakeRedis(), Settings(onchain_listings_enabled=True, onchain_upgrades_enabled=True, tonapi_key="k", tonapi_cold_every=3,  # type: ignore[arg-type]
                                                      tonapi_discovery_enabled=False), client=FakeClient())  # type: ignore[arg-type]
     seen: list[str] = []
 
@@ -420,7 +420,7 @@ async def test_stream_rechecks_unindexed_item_once(session: Any) -> None:
             return _api_nft(raw_item("0:b", 2, "0:o2", price=33))
 
     sync.client = Client()  # type: ignore[assignment]
-    stream = TonApiStream(sync, Settings(tonapi_key="k", tonapi_stream_delay=0, tonapi_stream_recheck=0.01))
+    stream = TonApiStream(sync, Settings(onchain_listings_enabled=True, onchain_upgrades_enabled=True, tonapi_key="k", tonapi_stream_delay=0, tonapi_stream_recheck=0.01))
     await stream.process_one("0:b")
     assert redis.events(STREAM_NFT_LISTINGS) == []
     await asyncio.gather(*list(stream._rechecks))
@@ -452,9 +452,17 @@ async def test_burst_of_new_items_is_not_announced(session: Any) -> None:
     from core.redis_client import STREAM_NFT_UPGRADES
 
     coll, redis, client, _ = await _setup(session)
-    sync = TonApiSync(session, redis, Settings(tonapi_key="k", upgrade_burst_max=3), client=client)  # type: ignore[arg-type]
+    sync = TonApiSync(session, redis, Settings(onchain_listings_enabled=True, onchain_upgrades_enabled=True, tonapi_key="k", upgrade_burst_max=3), client=client)  # type: ignore[arg-type]
     client.items = [raw_item("0:a", 1, "0:o1")]
     await sync.sync_collection(coll.id, "Teddy", ADDR, now=NOW)
     client.items += [raw_item(f"0:n{i}", 10 + i, "0:m") for i in range(5)]
     await sync.sync_collection(coll.id, "Teddy", ADDR, now=NOW + dt.timedelta(seconds=15))
     assert redis.events(STREAM_NFT_UPGRADES) == []
+
+
+async def test_onchain_alerts_are_off_by_default_but_sales_stay(session) -> None:
+    """По умолчанию листинги и апгрейды из блокчейна не публикуются (их дают маркеты), продажи — публикуются."""
+    from core.config import Settings as S
+
+    s = S(tonapi_key="k")
+    assert s.onchain_listings_enabled is False and s.onchain_upgrades_enabled is False and s.onchain_sales_enabled is True

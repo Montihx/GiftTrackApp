@@ -402,7 +402,7 @@ class TonApiSync:
             return (await self.session.get(ProcessedNft, nft_address)) is not None
 
     async def _publish(self, cid: str, name: str, address: str, diff: SyncDiff, now: dt.datetime) -> None:
-        for item in diff.listings:
+        for item in (diff.listings if self.settings.onchain_listings_enabled else []):
             event = ListingEvent(
                 nft_address=item.address, nft_index=item.index, collection_address=address,
                 marketplace=item.market, price_ton=float(item.price or 0), seller_ton=item.owner or "",
@@ -414,7 +414,7 @@ class TonApiSync:
             await stream_publish(self.redis, STREAM_NFT_LISTINGS, payload)
         # Апгрейды: предмет, которого не было в прошлых проходах (после первого прохода коллекции).
         # Пачка больше upgrade_burst_max за раз — не апгрейды, а сбой состояния: не рассылаем.
-        if not diff.bootstrap and diff.new_items:
+        if self.settings.onchain_upgrades_enabled and not diff.bootstrap and diff.new_items:
             if len(diff.new_items) > self.settings.upgrade_burst_max:
                 logger.warning(f"[tonapi_sync] {name}: {len(diff.new_items)} новых предметов за раз — апгрейды не шлю")
             else:
@@ -425,8 +425,9 @@ class TonApiSync:
                         "metadata": {"name": item.name or f"{name} #{item.index}", **item.attrs},
                     })
                 self.stats["upgrades"] = self.stats.get("upgrades", 0) + len(diff.new_items)
-        ton_usd = await self._ton_usd() if diff.sales else None
-        for item, price, prev in diff.sales:
+        sales = diff.sales if self.settings.onchain_sales_enabled else []
+        ton_usd = await self._ton_usd() if sales else None
+        for item, price, prev in sales:
             attrs = dict(item.attrs or prev.attrs)
             sale = {
                 "type": "sale", "collection_id": cid, "collection_name": name,
