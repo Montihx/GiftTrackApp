@@ -67,3 +67,26 @@ async def test_invalid_address_falls_back_to_placeholder(session: Any, tmp_path:
     await upsert_seed(session, _write(tmp_path, [{"name": "Bad", "contract_address": "nope"}]))
     row = (await session.execute(select(Collection))).scalar_one()
     assert row.contract_address == "tg_gift:bad"
+
+
+def test_shipped_seed_has_verified_addresses_and_icons() -> None:
+    entries = load_seed_entries(SEED)
+    assert all(e["has_address"] for e in entries)
+    assert all((e["icon_url"] or "").startswith("https://nft.fragment.com/collection/") for e in entries)
+
+
+async def test_backfill_sets_icon_and_fills_missing_icon(session: Any, tmp_path: Path) -> None:
+    icon = "https://nft.fragment.com/collection/plushpepe.webp"
+    await upsert_seed(session, _write(tmp_path, [{"name": "Plush Pepe"}]))
+    await session.commit()
+    await upsert_seed(session, _write(tmp_path, [{"name": "Plush Pepe", "contract_address": ADDR, "icon_url": icon}]))
+    await session.commit()
+    c = (await session.execute(select(Collection))).scalar_one()
+    assert c.contract_address == ADDR and c.icon_url == icon
+
+    c.icon_url = None
+    await session.commit()
+    stats = await upsert_seed(session, _write(tmp_path, [{"name": "Plush Pepe", "contract_address": ADDR, "icon_url": icon}]))
+    await session.commit()
+    await session.refresh(c)
+    assert stats["skipped"] == 1 and c.icon_url == icon

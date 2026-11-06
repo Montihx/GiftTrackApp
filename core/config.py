@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     getgems_ws_url: str = Field(default="wss://api.getgems.io/graphql")
     getgems_api_url: str = Field(default="https://api.getgems.io/graphql")
     tonviewer_api_key: str = Field(default="")
+    # Tonviewer (listener-ton) выключен по умолчанию: API недоступен (404). Включить: TONVIEWER_ENABLED=true
+    tonviewer_enabled: bool = Field(default=False)
     # TonAPI (tonconsole.com). Ключ есть -> TonAPI primary; нет -> seed-каталог + GetGems fallback
     tonapi_key: str = Field(default="")
     tonapi_url: str = Field(default="https://tonapi.io")
@@ -60,6 +62,11 @@ class Settings(BaseSettings):
     # Если items больше лимита — floor НЕ пишем (частичный скан даёт неверную цену).
     tonapi_floor_scan_limit: int = Field(default=3000)
     tonapi_poll_interval: float = Field(default=15.0)
+    # Общий лимит запросов к TonAPI на процесс (free-тариф tonconsole — 1 RPS; на платном поднимите)
+    tonapi_rps: float = Field(default=1.0)
+    # Постраничный скан: сколько страниц (по 1000 items) на коллекцию за цикл. Коллекция больше
+    # pages*1000 сканируется за несколько циклов; floor/атрибуты пересчитываются по завершении прохода.
+    tonapi_pages_per_cycle: int = Field(default=3, ge=1)
     # Seed-каталог коллекций (upsert при старте updater)
     seed_catalog_path: str = Field(default="db/seed/gift_collections.json")
     telegram_api_base: str = Field(

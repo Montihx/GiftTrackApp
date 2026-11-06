@@ -168,3 +168,33 @@ button.row-item { cursor: pointer; }
   display: flex; align-items: center; justify-content: center; flex: none; }
 .benefit-title { font-weight: 600; font-size: 15px; }
 .benefit-text { color: #8a8a95; font-size: 13px; }
+
+/* фильтры: выпадающий список с поиском */
+.ss { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.ss-btn { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: #fff; font-size: 15px;
+  text-align: left; cursor: pointer; }
+.ss-btn.open { border-color: var(--accent); }
+.ss-val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-val.ph { color: var(--muted); }
+.ss-hint { color: var(--floor); font-size: 13px; white-space: nowrap; }
+.ss-caret { color: var(--muted); font-size: 12px; }
+.ss-pop { position: absolute; top: 100%; left: 0; right: 0; margin-top: 4px; z-index: 20; background: #1d2a38;
+  border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+.form .ss-search, .ss-search { width: 100%; padding: 10px 12px; border: none; border-bottom: 1px solid var(--line);
+  border-radius: 0; background: transparent; color: #fff; font-size: 15px; outline: none; }
+.ss-list { max-height: 260px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.ss-opt { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: none;
+  background: transparent; color: #fff; font-size: 15px; text-align: left; cursor: pointer; }
+.ss-opt.on, .ss-opt:active { background: rgba(43, 82, 120, 0.45); }
+.ss-empty { padding: 12px; color: var(--muted); font-size: 14px; text-align: center; }
+.fblock { margin-top: 10px; background: var(--card); border-radius: var(--radius); padding: 12px; }
+.fblock-title { font-size: 14px; font-weight: 600; }
+.fblock-hint { color: var(--floor); font-size: 13px; margin-top: 8px; }
+.fblock-err { color: var(--down); font-size: 13px; margin-top: 8px; }
+.form .fblock input { background: #1d2a38; }
+.form-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; margin-top: 14px; }
+.fcard { display: flex; align-items: center; gap: 12px; }
+.fcard-main { flex: 1; min-width: 0; }
+.fcard .card-sub { margin-bottom: 0; }
+.list .empty .btn { font-size: 14px; }

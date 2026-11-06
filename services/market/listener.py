@@ -57,6 +57,7 @@ from core.redis_client import STREAM_NFT_LISTINGS, cache_get_json, cache_set_jso
 from core.retry import with_retry
 from services.collection_discovery import _http_request
 from services.market.events import ListingEvent, listing_to_stream_payload
+from services.tonapi_sync import TonApiSync
 
 GQL_RECENT_LISTINGS = """
 query RecentListings($address: Address!, $limit: Int!) {
@@ -102,9 +103,14 @@ class MarketListener:
         self.settings = settings or get_settings()
         self._rate = asyncio.Semaphore(self.settings.api_max_concurrency)
         self.stats = {"listings": 0, "errors": 0, "empty": 0}
+        # TonAPI primary при наличии ключа (A9): снимки items вместо GetGems, опрос каждые tonapi_poll_interval
+        self._tonapi_sync = TonApiSync(session, redis, self.settings) if self.settings.tonapi_enabled else None
 
     async def process_collections(self) -> None:
         """Один цикл обработки всех коллекций из БД."""
+        if self._tonapi_sync is not None:
+            await self._tonapi_sync.process_collections()
+            return
         from db.models import Collection
 
         stmt = select(Collection.id, Collection.name, Collection.contract_address).where(
@@ -243,7 +249,12 @@ class MarketListener:
 
     async def run_loop(self, stop_event: asyncio.Event) -> None:
         """Основной цикл: обработка всех коллекций каждые settings.market_poll_interval."""
-        logger.info(f"[market_listener] старт, интервал {self.settings.market_poll_interval}s")
+        interval = (
+            self.settings.tonapi_poll_interval if self._tonapi_sync is not None
+            else self.settings.market_poll_interval
+        )
+        source = "TonAPI" if self._tonapi_sync is not None else "GetGems"
+        logger.info(f"[market_listener] старт, источник {source}, интервал {interval}s")
 
         while not stop_event.is_set():
             try:
@@ -254,7 +265,7 @@ class MarketListener:
                 logger.error(f"[market_listener] итерация упала: {exc!r}", exc_info=True)
 
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=self.settings.market_poll_interval)
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
             except asyncio.TimeoutError:
                 pass
 

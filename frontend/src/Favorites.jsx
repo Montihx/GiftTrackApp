@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiGet, shortAddr } from "./api";
 import { CollectionCard } from "./Home.jsx";
 import { navigate } from "./router";
-import { EmptyState, Skeleton } from "./ui";
+import { CollectionIcon, EmptyState, Skeleton } from "./ui";
 
 export default function Favorites() {
   const [data, setData] = useState(null);
@@ -63,7 +63,11 @@ export default function Favorites() {
           <div className="panel rows">
             {data.items.map((i) => (
               <button className="row-item" key={i.item_address} onClick={() => navigate(`i/${encodeURIComponent(i.item_address)}`)}>
-                <div className="row-main">{shortAddr(i.item_address)}</div>
+                <CollectionIcon url={i.icon_url} name={i.collection_name || "?"} size={32} />
+                <div className="row-main">
+                  <div>{i.name || shortAddr(i.item_address)}</div>
+                  {i.model ? <div className="row-sub">{i.model}</div> : null}
+                </div>
                 <span className="row-sub">›</span>
               </button>
             ))}

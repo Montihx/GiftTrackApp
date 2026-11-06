@@ -358,3 +358,21 @@ class Favorite(Base):
             sqlite_where=text("item_address IS NOT NULL"),
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# 14. payment_invoices — обработанные инвойсы CryptoBot (идемпотентность вебхука)
+# ---------------------------------------------------------------------------
+class PaymentInvoice(Base):
+    """invoice_id — PK: повторная доставка вебхука не продлевает подписку второй раз."""
+
+    __tablename__ = "payment_invoices"
+
+    invoice_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    tg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    days: Mapped[int] = mapped_column(Integer, nullable=False)
+    paid_asset: Mapped[str | None] = mapped_column(Text)
+    paid_amount: Mapped[Decimal | None] = mapped_column(Numeric(30, 9))
+    processed_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

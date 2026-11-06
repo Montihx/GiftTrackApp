@@ -20,6 +20,23 @@ def test_parse_ton_price() -> None:
     assert parse_ton_price({"price": {"value": "1", "token_name": "USDT"}}) is None
     assert parse_ton_price({"price": {"value": "abc"}}) is None
     assert parse_ton_price(None) is None
+    # живой формат TonAPI (2026-11): нативная монета называется "Gram"
+    live = {"price": {"currency_type": "native", "value": "2500000000000", "decimals": 9, "token_name": "Gram"}}
+    assert parse_ton_price(live) == Decimal("2500")
+    jetton = {"price": {"currency_type": "jetton", "value": "1000000", "decimals": 6, "token_name": "USDT"}}
+    assert parse_ton_price(jetton) is None
+
+
+async def test_rate_limiter_spaces_requests() -> None:
+    import asyncio
+
+    lim = tonapi.RateLimiter(rps=50)
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    for _ in range(4):
+        await lim.acquire()
+    assert loop.time() - t0 >= 3 / 50 * 0.9
+    assert tonapi.shared_limiter(7.0) is tonapi.shared_limiter(7.0)
 
 
 def test_floor_from_items_takes_min_and_ignores_unlisted() -> None:

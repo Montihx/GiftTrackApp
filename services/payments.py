@@ -2,18 +2,28 @@
 """
 Crypto Pay API: создание инвойсов + активация подписки.
 
+Сверено с SDK aiocryptopay 0.4.8 и aiosend 3.0.8 (официальная справка help.send.tg недоступна
+автоматическим клиентам):
+
 createInvoice:
     POST https://pay.crypt.bot/api/createInvoice
     headers: Crypto-Pay-API-Token: <token>
-    body: {"asset": "TON", "amount": "10.0", "payload": "<tg_id>", "description": "..."}
-    Ответ: {"ok": true, "result": {"invoice_id": 1, "pay_url": "https://t.me/...", "status": "active"}}
+    crypto: {"asset": "TON", "amount": "10.0", "payload": "<tg_id>:<days>", "description": "..."}
+    fiat:   {"currency_type": "fiat", "fiat": "USD", "accepted_assets": "TON,USDT", "amount": "49", ...}
+            (accepted_assets — строка через запятую; payload до 4 КБ, description до 1024 символов)
+    Ответ: {"ok": true, "result": {"invoice_id": 1, "bot_invoice_url": "https://t.me/...", ...}}
+    pay_url устарел -> bot_invoice_url; клиент кладёт ссылку в result["pay_url"] для совместимости.
 
-Вебхук оплаты приходит на /api/payments/webhook/{secret} с телом:
-    {"update_id": 1, "payload": {"invoice_id": 1, "status": "paid", "payload": "<tg_id>"}}
+Вебхук оплаты приходит на /api/payments/webhook/{secret}:
+    {"update_id": 1, "update_type": "invoice_paid", "request_date": "...",
+     "payload": {"invoice_id": 1, "status": "paid", "payload": "<tg_id>:<days>", ...}}
+    Заголовок Crypto-Pay-Api-Signature = hex(HMAC-SHA256(key=SHA256(token), msg=сырое тело)).
 """
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import hmac
 from typing import Any
 
 import aiohttp
@@ -54,10 +64,22 @@ class CryptoBotClient:
                 async with sess.post(f"{CRYPTOBOT_API}/createInvoice", json=body, headers=headers) as resp:
                     data = orjson.loads(await resp.read())
                     if not data.get("ok"):
-                        raise RuntimeError(f"CryptoBot error: {data.get('description')}")
-                    return data["result"]
+                        raise RuntimeError(f"CryptoBot error: {data.get('error') or data.get('description')}")
+                    result = data["result"]
+                    # pay_url устарел: актуальная ссылка — bot_invoice_url
+                    result["pay_url"] = result.get("bot_invoice_url") or result.get("pay_url")
+                    return result
 
         return await with_retry(_do, context="cryptobot.createInvoice")
+
+
+def verify_webhook_signature(token: str, body: bytes, signature: str | None) -> bool:
+    """Crypto-Pay-Api-Signature: hex(HMAC-SHA256(key=SHA256(token), msg=body))."""
+    if not signature:
+        return False
+    secret = hashlib.sha256(token.encode()).digest()
+    expected = hmac.new(secret, body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature.strip().lower())
 
 
 async def activate_subscription(session: AsyncSession, tg_id: int, days: int) -> dt.datetime:
