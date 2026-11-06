@@ -41,7 +41,8 @@ export default function App() {
       ]);
       const cData = await cRes.json();
       const fData = await fRes.json();
-      setCollections(cData.collections || []);
+      // seed-коллекции без адреса контракта в форме фильтров не нужны (отслеживать нечего)
+      setCollections((cData.collections || []).filter((c) => c.trackable !== false));
       setFilters(fData.filters || []);
     } catch (e) {
       setMsg("Ошибка загрузки данных");
