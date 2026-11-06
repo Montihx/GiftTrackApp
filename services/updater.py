@@ -70,6 +70,7 @@ from core.redis_client import cache_set_json, floor_key, recent_sales_key
 from core.retry import with_retry
 from db.models import Attribute, Collection, FloorSnapshot, ModelSale, Sale
 from services.collection_discovery import _http_request, _to_decimal
+from services.floors import apply_collection_floor
 from services.seed import upsert_seed
 from services.tonapi import TonApiClient
 
@@ -167,6 +168,10 @@ class FloorAndSalesUpdater:
     # ------------------------------------------------------------------
     async def update_floors(self) -> None:
         """Общий floor коллекции + floor по каждой модели -> Redis (TTL 30s) + БД."""
+        if self._tonapi.enabled:
+            # floors/листинги/продажи ведёт TonApiSync в listener-market — не дублируем запросы к TonAPI
+            logger.debug("update_floors: TonAPI-режим, floors обновляет listener-market")
+            return
         async with self._lock:
             rows = (
                 await self.session.execute(
@@ -240,19 +245,7 @@ class FloorAndSalesUpdater:
 
         При изменении floor дополнительно пишем FloorSnapshot(collection_id, price, ts).
         """
-        tbl = Collection.__table__
-        prev = (
-            await self.session.execute(select(tbl.c.floor_price).where(tbl.c.id == coll_id))
-        ).scalar_one_or_none()
-        if prev is None or Decimal(str(prev)) != floor:
-            self.session.add(
-                FloorSnapshot(collection_id=coll_id, price=floor, ts=dt.datetime.now(dt.timezone.utc))
-            )
-        await self.session.execute(
-            pg_update(Collection.__table__)
-            .where(Collection.__table__.c.id == coll_id)
-            .values(floor_price=floor, last_updated=func.now())
-        )
+        await apply_collection_floor(self.session, coll_id, floor)
 
     async def _db_update_attribute_floor(self, attr_id: uuid.UUID, floor: Decimal) -> None:
         await self.session.execute(
@@ -270,6 +263,8 @@ class FloorAndSalesUpdater:
           Redis recent_sales:{cid}:{model} = JSON-список (TTL 30s)
           БД model_sales — INSERT c ON CONFLICT DO NOTHING (уникальность по tx-hash ниже).
         """
+        if self._tonapi.enabled:  # в TonAPI-режиме это делает TonApiSync (listener-market)
+            return
         async with self._lock:
             rows = (
                 await self.session.execute(
@@ -410,6 +405,8 @@ class FloorAndSalesUpdater:
         каждого трейта и пишем в attributes.items_count.
         Процент редкости = attr.items_count / collection.items_count * 100.
         """
+        if self._tonapi.enabled:  # в TonAPI-режиме это делает TonApiSync (listener-market)
+            return
         from collections import Counter
 
         from core.config import map_trait_type

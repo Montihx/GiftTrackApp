@@ -217,6 +217,13 @@ class TonListener:
 
         Останавливается по stop_event (ShutdownManager).
         """
+        if not self.settings.tonviewer_enabled:
+            logger.warning(
+                "[ton_listener] Tonviewer отключён (TONVIEWER_ENABLED=false) — данные идут "
+                "через TonAPI-синхронизацию в listener-market; ожидаю остановки"
+            )
+            await stop_event.wait()
+            return
         logger.info(f"[ton_listener] старт, интервал {self.settings.ton_poll_interval}s")
 
         while not stop_event.is_set():

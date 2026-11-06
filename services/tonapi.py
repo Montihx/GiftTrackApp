@@ -59,8 +59,8 @@ class TonApiClient:
                                   context=f"tonapi:{context or path}")
         return orjson.loads(raw)
 
-    async def fetch_collection_floor(self, address: str) -> Decimal | None:
-        """Floor коллекции или None, если скан неполный/листингов нет."""
+    async def fetch_collection_items(self, address: str) -> list[dict[str, Any]] | None:
+        """Все items коллекции или None, если их больше tonapi_floor_scan_limit (скан был бы неполным)."""
         limit = self.settings.tonapi_floor_scan_limit
         items: list[dict[str, Any]] = []
         offset = 0
@@ -73,12 +73,16 @@ class TonApiClient:
             batch = (page or {}).get("nft_items") or []
             items.extend(batch)
             if len(batch) < PAGE_LIMIT:
-                break  # последняя страница — скан полный
+                return items
             offset += PAGE_LIMIT
             if offset >= limit:
-                logger.info(f"tonapi: {address[:8]}… больше {limit} items — floor не считаю")
+                logger.info(f"tonapi: {address[:8]}… больше {limit} items — пропускаю")
                 return None
-        return floor_from_items(items)
+
+    async def fetch_collection_floor(self, address: str) -> Decimal | None:
+        """Floor коллекции или None, если скан неполный/листингов нет."""
+        items = await self.fetch_collection_items(address)
+        return floor_from_items(items) if items is not None else None
 
     async def fetch_item_sale_price(self, item_address: str) -> Decimal | None:
         """Цена активного листинга NFT (GET /v2/nfts/{address}) или None."""

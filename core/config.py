@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     getgems_ws_url: str = Field(default="wss://api.getgems.io/graphql")
     getgems_api_url: str = Field(default="https://api.getgems.io/graphql")
     tonviewer_api_key: str = Field(default="")
+    # Tonviewer (listener-ton) выключен по умолчанию: API недоступен (404). Включить: TONVIEWER_ENABLED=true
+    tonviewer_enabled: bool = Field(default=False)
     # TonAPI (tonconsole.com). Ключ есть -> TonAPI primary; нет -> seed-каталог + GetGems fallback
     tonapi_key: str = Field(default="")
     tonapi_url: str = Field(default="https://tonapi.io")
