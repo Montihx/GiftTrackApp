@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     owner_lookup_interval: float = Field(default=1.0, ge=0.2)  # пауза воркера между запросами к Telegram, с
     # Апгрейды из скана: больше стольких новых предметов за один проход чанка — не рассылать (сбой, не апгрейды)
     upgrade_burst_max: int = Field(default=20, ge=1)
+    # апгрейды из Telegram (с контактом владельца), см. services/telegram_upgrades.py
+    tg_upgrades_enabled: bool = Field(default=True)
+    tg_upgrades_interval: float = Field(default=0.8, ge=0.2)  # пауза между запросами к Telegram, с
+    tg_upgrades_cold_per_round: int = Field(default=5, ge=0)  # «холодных» коллекций за круг
+    tg_upgrades_max_per_poll: int = Field(default=5, ge=1)  # событий с одной коллекции за опрос
+    tg_upgrades_skip_gap: int = Field(default=20, ge=1)  # отставание больше — старые апгрейды не рассылаем
     tg_market_enabled: bool = Field(default=True)
     tg_market_interval: float = Field(default=2.0, ge=0.5)  # пауза между запросами листингов, с
     tg_market_catalog_interval: int = Field(default=300, ge=30)  # каталог/флоры маркета, с

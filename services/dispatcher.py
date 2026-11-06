@@ -254,7 +254,10 @@ class NotificationDispatcher:
         if not await self._has_candidates(collection_id, metadata, "upgrade", number=gift_number(name, slug)):
             self.stats["upgrades"] += 1
             return
-        owner, info = await self._find_owner(owner_ton or "", slug)
+        # Апгрейд из Telegram уже несёт контакт владельца (owner_tg_id/owner_username/owner_name)
+        known = {"tg_user_id": payload.get("owner_tg_id"), "username": payload.get("owner_username"),
+                 "name": payload.get("owner_name")} if payload.get("source") == "telegram" else None
+        owner, info = await self._find_owner(owner_ton or "", slug, known)
         owner_link = self._owner_link(owner, owner_ton or "")
         tme = f"https://t.me/nft/{slug}" if slug else None
 
@@ -715,6 +718,11 @@ class NotificationDispatcher:
     def _dedup_key(self, stream: str, payload: dict[str, Any]) -> str:
         addr = payload.get("nft_address") or payload.get("slug") or payload.get("nft_name") or ""
         kind = {STREAM_NFT_UPGRADES: "upgrade", STREAM_NFT_LISTINGS: "listing", STREAM_NFT_SALES: "sale"}[stream]
+        if stream == STREAM_NFT_UPGRADES:
+            # один апгрейд приходит и из Telegram, и из блокчейна: ключ — (коллекция, номер), а не адрес
+            number = gift_number((payload.get("metadata") or {}).get("name"), payload.get("slug"))
+            if number is not None and payload.get("collection_id"):
+                return f"dedup:ev:upgrade:{payload['collection_id']}:{number}"
         tail = payload.get("tx_hash") or payload.get("price_stars") or payload.get("price_ton") or ""
         return f"dedup:ev:{kind}:{addr}:{tail}"
 
