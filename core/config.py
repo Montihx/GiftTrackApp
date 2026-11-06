@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # показывать флор маркета Telegram (отдельной строкой на странице коллекции); на карточках всегда ончейн-флор
     tg_floor_show: bool = Field(default=False)
     # шина событий диспетчера: повторы и забор зависших сообщений
+    # лимиты отправки (ТЗ 8.7) и доступ по подписке
+    send_rate_global: int = Field(default=25, ge=1)  # сообщений в секунду на весь бот
+    send_rate_user_sec: int = Field(default=1, ge=1)
+    send_rate_user_min: int = Field(default=20, ge=1)
+    subscription_required: bool = Field(default=False)  # True — алерты только пользователям с активной платной подпиской
     dispatch_max_attempts: int = Field(default=5, ge=1)
     dispatch_retry_base: float = Field(default=0.5, ge=0)  # пауза перед повтором: base * 2**попытка, с
     dispatch_claim_idle_ms: int = Field(default=60_000, ge=1000)  # pending дольше — забираем у упавшего потребителя

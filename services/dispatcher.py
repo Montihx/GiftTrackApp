@@ -69,7 +69,8 @@ from core.redis_client import (
     owner_history_key,
     recent_sales_key,
 )
-from db.models import Attribute, Filter
+from db.models import Attribute, Filter, User
+from services.rate_limit import SendRateLimiter
 from services.owner_lookup import gift_slug, request_owner
 from services.resolver.resolver import OwnerResolver
 
@@ -208,6 +209,10 @@ class NotificationDispatcher:
         self.resolver = resolver
         self.settings = settings or get_settings()
         self.stats = {"upgrades": 0, "listings": 0, "sales": 0, "sent": 0, "errors": 0}
+        self.limiter = SendRateLimiter(
+            redis, global_per_sec=self.settings.send_rate_global,
+            user_per_sec=self.settings.send_rate_user_sec, user_per_min=self.settings.send_rate_user_min,
+        )
 
     async def process_upgrade(self, payload: dict[str, Any]) -> None:
         """Обработка события апгрейда (mint)."""
@@ -478,7 +483,7 @@ class NotificationDispatcher:
                     ok = False
             if ok:
                 target_users.add(f.user_id)
-        return target_users, no_contact
+        return await self._subscribed_users(target_users), no_contact
 
     async def _has_candidates(
         self,
@@ -528,10 +533,7 @@ class NotificationDispatcher:
         # Превью ссылки: карточка подарка Telegram (t.me/nft/…) с картинкой, а не баннер маркетплейса
         preview = LinkPreviewOptions(url=preview_url, show_above_text=False) if preview_url \
             else LinkPreviewOptions(is_disabled=True)
-        tasks = [
-            self.bot.send_message(uid, text, parse_mode="HTML", reply_markup=keyboard, link_preview_options=preview)
-            for uid in target_users
-        ]
+        tasks = [self._send_limited(uid, text, keyboard, preview) for uid in target_users]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for uid, res in zip(target_users, results, strict=True):
             if isinstance(res, Exception):
@@ -541,6 +543,53 @@ class NotificationDispatcher:
                 self.stats["sent"] += 1
 
         logger.info(f"Алерт отправлен {len(target_users)} подписчикам")
+
+    async def _send_limited(self, uid: int, text: str, keyboard: Any, preview: Any) -> Any:
+        """Отправка с лимитами (ТЗ 8.7): минутный лимит -> сводка «ещё N», 429 -> ждём retry_after, 403 -> не пишем."""
+        from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+
+        blocked = await self.redis.get(f"rl:blocked:{uid}")
+        if isinstance(blocked, (bytes, str)):
+            return None  # пользователь заблокировал бота
+        if not await self.limiter.acquire(uid):
+            self.stats["throttled"] = self.stats.get("throttled", 0) + 1
+            return None
+        over = await self.limiter.pop_over(uid)
+        if over:
+            await self.bot.send_message(
+                uid, f"ℹ️ Ещё {over} сигналов не показано: лимит {self.settings.send_rate_user_min} в минуту. "
+                     "Остальное — в ленте мини-приложения.",
+            )
+        for attempt in (1, 2):
+            try:
+                return await self.bot.send_message(
+                    uid, text, parse_mode="HTML", reply_markup=keyboard, link_preview_options=preview
+                )
+            except TelegramRetryAfter as exc:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(exc.retry_after)
+            except TelegramForbiddenError:
+                await self.redis.set(f"rl:blocked:{uid}", b"1", ex=86400)
+                logger.info(f"[dispatcher] пользователь {uid} заблокировал бота — отправка остановлена на сутки")
+                return None
+        return None
+
+    async def _subscribed_users(self, user_ids: set[int]) -> set[int]:
+        """Из user_ids — те, у кого активна платная подписка (если SUBSCRIPTION_REQUIRED=false — все)."""
+        if not self.settings.subscription_required or not user_ids:
+            return user_ids
+        now = dt.datetime.now(dt.timezone.utc)
+        rows = (await self.session.execute(
+            select(User.tg_id, User.sub_plan, User.sub_expires_at).where(User.tg_id.in_(user_ids))
+        )).all()
+        ok: set[int] = set()
+        for tg_id, plan, expires in rows:
+            if expires is not None and expires.tzinfo is None:
+                expires = expires.replace(tzinfo=dt.timezone.utc)
+            if plan and plan != "free" and expires is not None and expires > now:
+                ok.add(tg_id)
+        return ok
 
     async def _model_floor(self, collection_id: Any, model: str | None) -> float | None:
         if collection_id is None or not model:
