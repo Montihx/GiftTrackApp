@@ -114,6 +114,7 @@ class FakeRedis:
     def __init__(self) -> None:
         self.kv: dict[str, bytes] = {}
         self.h: dict[str, dict[str, bytes]] = {}
+        self.sets: dict[str, set[str]] = {}
         self.stream: list[tuple[str, dict[str, str]]] = []
 
     async def set(self, key: str, value: bytes, ex: int | None = None) -> None:
@@ -138,6 +139,12 @@ class FakeRedis:
     async def expire(self, key: str, ttl: int) -> None:
         pass
 
+    async def sismember(self, key: str, member: str) -> bool:
+        return member in self.sets.get(key, set())
+
+    async def sadd(self, key: str, member: str) -> None:
+        self.sets.setdefault(key, set()).add(member)
+
     async def xadd(self, stream: str, entry: dict[str, str], maxlen: int | None = None,
                    approximate: bool = True) -> bytes:
         self.stream.append((stream, entry))
@@ -154,6 +161,9 @@ class FakeClient:
 
     async def fetch_ton_usd(self) -> float | None:
         return 2.0
+
+    async def fetch_account_nfts(self, account: str, offset: int, limit: int = 1000) -> list[dict[str, Any]]:
+        return []
 
     async def fetch_items_page(self, address: str, offset: int, limit: int = 1000) -> list[dict[str, Any]]:
         self.calls.append(offset)

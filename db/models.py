@@ -53,7 +53,7 @@ class Collection(Base):
     icon_url: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="telegram_api",
-        comment="telegram_api | getgems | manual | seed",
+        comment="telegram_api | getgems | manual | seed | tonapi",
     )
     # NULL = цена неизвестна (нет TonAPI-ключа / не удалось получить) — витрина показывает «—»
     floor_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
@@ -68,7 +68,7 @@ class Collection(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "source IN ('telegram_api','getgems','manual','seed')",
+            "source IN ('telegram_api','getgems','manual','seed','tonapi')",
             name="ck_collections_source",
         ),
         Index("ix_collections_floor", "floor_price"),
