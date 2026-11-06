@@ -104,7 +104,11 @@ docker compose up -d --remove-orphans   # контейнеры сервисов 
 docker compose ps
 
 say "7/7 Вход в Telegram для маркета подарков и резолвера"
-if docker compose run --rm -T resolver python - <<'PY'
+# Файл сессии Telethon (sqlite) открывает только один процесс: пока работает resolver, второй получит
+# "database is locked". Поэтому на время проверки/входа resolver останавливаем, потом запускаем.
+set +e
+docker compose stop resolver >/dev/null 2>&1
+docker compose run --rm -T resolver python - <<'PY'
 import asyncio, sys
 from bot.resolver_main import _make_client
 from core.config import get_settings
@@ -116,18 +120,18 @@ async def main():
     sys.exit(0 if ok else 1)
 asyncio.run(main())
 PY
-then
+code=$?
+if [ "$code" = 0 ]; then
   echo "  Telegram уже авторизован."
+elif [ "$code" = 2 ]; then
+  echo "  API_ID/API_HASH не заданы — вход пропущен (маркет Telegram и резолвер будут простаивать)."
 else
-  code=$?
-  if [ "$code" = 2 ]; then
-    echo "  API_ID/API_HASH не заданы — вход пропущен (маркет Telegram и резолвер будут простаивать)."
-  else
-    echo "  Откройте Telegram на телефоне: Настройки -> Устройства -> Подключить устройство и отсканируйте QR."
-    docker compose run --rm -it resolver python -m bot.resolver_main --login-qr
-    docker compose restart resolver
-  fi
+  echo "  Откройте Telegram на телефоне: Настройки -> Устройства -> Подключить устройство и отсканируйте QR."
+  echo "  (если Telegram только на этом телефоне — нажмите ^C и войдите по коду: docker compose run --rm -it resolver python -m bot.resolver_main --login)"
+  docker compose run --rm -it resolver python -m bot.resolver_main --login-qr
 fi
+docker compose up -d resolver
+set -e
 
 say "Проверка (подождите ~1 мин и посмотрите строки ниже)"
 sleep 45
