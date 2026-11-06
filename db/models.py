@@ -118,6 +118,7 @@ class User(Base):
     first_name: Mapped[str | None] = mapped_column(Text)
     sub_expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     sub_plan: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'free'"))
+    is_banned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("FALSE"))
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

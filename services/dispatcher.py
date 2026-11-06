@@ -558,8 +558,18 @@ class NotificationDispatcher:
                 self.stats["errors"] += 1
             else:
                 self.stats["sent"] += 1
+                await self._count("sent")
 
         logger.info(f"Алерт отправлен {len(target_users)} подписчикам")
+
+    async def _count(self, name: str) -> None:
+        """Суточный счётчик для /stats (Redis, хранится 8 дней)."""
+        try:
+            key = f"stats:{name}:{dt.datetime.now(dt.timezone.utc):%Y%m%d}"
+            await self.redis.incr(key)
+            await self.redis.expire(key, 8 * 86400)
+        except Exception:  # noqa: BLE001 — статистика не должна ломать доставку
+            pass
 
     async def _send_limited(self, uid: int, text: str, keyboard: Any, preview: Any) -> Any:
         """Отправка с лимитами (ТЗ 8.7): минутный лимит -> сводка «ещё N», 429 -> ждём retry_after, 403 -> не пишем."""
@@ -593,7 +603,13 @@ class NotificationDispatcher:
         return None
 
     async def _subscribed_users(self, user_ids: set[int]) -> set[int]:
-        """Из user_ids — те, у кого активна платная подписка (если SUBSCRIPTION_REQUIRED=false — все)."""
+        """Из user_ids — без забаненных и (если SUBSCRIPTION_REQUIRED=true) только с активной платной подпиской."""
+        if not user_ids:
+            return user_ids
+        banned = {r[0] for r in (await self.session.execute(
+            select(User.tg_id).where(User.tg_id.in_(user_ids), User.is_banned.is_(True))
+        )).all()}
+        user_ids = user_ids - banned
         if not self.settings.subscription_required or not user_ids:
             return user_ids
         now = dt.datetime.now(dt.timezone.utc)
@@ -747,6 +763,7 @@ class NotificationDispatcher:
                 try:
                     payload = orjson.loads(raw.decode() if isinstance(raw, bytes) else raw)
                     await self._handle_message(stream, payload)
+                    await self._count({"nft_upgrades": "upgrades", "nft_listings": "listings", "nft_sales": "sales"}[stream])
                     reason = ""
                     break
                 except asyncio.CancelledError:

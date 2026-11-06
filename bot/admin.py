@@ -1,15 +1,20 @@
 # /workspace/bot/admin.py — админ-команды (выдача доступа без оплаты)
-"""Команды только для ID из settings.admin_tg_ids: /grant, /revoke, /users, /add_collection."""
+"""Команды только для ID из settings.admin_tg_ids: /grant, /revoke, /users, /add_collection,
+/ban, /unban, /stats, /dlq, /dlq_clear, /broadcast (+ /broadcast_confirm)."""
 from __future__ import annotations
+
+import asyncio
+import datetime as dt
 
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from core.config import get_settings
 from core.ton_address import normalize_ton_address
-from db.models import Collection, User
+from core.redis_client import STREAM_DLQ, create_redis
+from db.models import Collection, Filter, User
 from services.payments import activate_subscription
 
 admin_router = Router()
@@ -108,3 +113,155 @@ async def cmd_add_collection(msg: Message, cmd: CommandObject, session) -> None:
         await msg.answer(f"ℹ️ Уже есть: {coll.name} ({coll.source})")
     else:
         await msg.answer(f"✅ Добавлена: {coll.name}")
+
+
+# ---------- бан, статистика, очередь ошибок, рассылка ----------
+def _tg_id_arg(cmd: CommandObject) -> int | None:
+    args = (cmd.args or "").split()
+    return int(args[0]) if args and args[0].isdigit() else None
+
+
+@admin_router.message(Command("ban"))
+async def cmd_ban(msg: Message, cmd: CommandObject, session) -> None:
+    """Забанить: уведомления не приходят, подписка не снимается: /ban <tg_id>."""
+    if not _is_admin(msg):
+        return
+    tg_id = _tg_id_arg(cmd)
+    if tg_id is None:
+        await msg.answer("Формат: /ban <tg_id>")
+        return
+    user = (await session.execute(select(User).where(User.tg_id == tg_id))).scalar_one_or_none()
+    if user is None:
+        await msg.answer("Пользователь не найден")
+        return
+    user.is_banned = True
+    await session.flush()
+    await msg.answer(f"⛔ {tg_id} забанен: алерты ему больше не отправляются")
+
+
+@admin_router.message(Command("unban"))
+async def cmd_unban(msg: Message, cmd: CommandObject, session) -> None:
+    if not _is_admin(msg):
+        return
+    tg_id = _tg_id_arg(cmd)
+    user = (await session.execute(select(User).where(User.tg_id == tg_id))).scalar_one_or_none() if tg_id else None
+    if user is None:
+        await msg.answer("Формат: /unban <tg_id> (пользователь должен существовать)")
+        return
+    user.is_banned = False
+    await session.flush()
+    await msg.answer(f"✅ {tg_id} разбанен")
+
+
+async def build_stats(session, redis) -> str:
+    """Текст /stats: пользователи, подписки, фильтры, события и алерты за сегодня и вчера, очередь ошибок."""
+    now = dt.datetime.now(dt.timezone.utc)
+    users = (await session.execute(select(func.count()).select_from(User))).scalar_one()
+    paid = (await session.execute(
+        select(func.count()).select_from(User).where(User.sub_plan != "free", User.sub_expires_at > now)
+    )).scalar_one()
+    banned = (await session.execute(select(func.count()).select_from(User).where(User.is_banned.is_(True)))).scalar_one()
+    filters = (await session.execute(select(func.count()).select_from(Filter).where(Filter.is_active.is_(True)))).scalar_one()
+    lines = [f"👥 Пользователей: {users} (с подпиской {paid}, забанено {banned})", f"🎯 Активных фильтров: {filters}"]
+    for label, day in (("сегодня", now), ("вчера", now - dt.timedelta(days=1))):
+        vals = []
+        for name, title in (("listings", "листингов"), ("sales", "продаж"), ("upgrades", "апгрейдов"), ("sent", "алертов отправлено")):
+            raw = await redis.get(f"stats:{name}:{day:%Y%m%d}")
+            vals.append(f"{int(raw) if raw else 0} {title}")
+        lines.append(f"📊 {label}: " + ", ".join(vals))
+    try:
+        lines.append(f"🧯 Очередь ошибок nft_dlq: {int(await redis.xlen(STREAM_DLQ))}")
+    except Exception:  # noqa: BLE001
+        pass
+    return "\n".join(lines)
+
+
+@admin_router.message(Command("stats"))
+async def cmd_stats(msg: Message, session) -> None:
+    if not _is_admin(msg):
+        return
+    redis = create_redis()
+    try:
+        await msg.answer(await build_stats(session, redis))
+    finally:
+        await redis.aclose()
+
+
+@admin_router.message(Command("dlq"))
+async def cmd_dlq(msg: Message, cmd: CommandObject) -> None:
+    """Последние события из nft_dlq: /dlq [сколько, по умолчанию 5]."""
+    if not _is_admin(msg):
+        return
+    n = min(int((cmd.args or "5").split()[0]) if (cmd.args or "5").split()[0].isdigit() else 5, 20)
+    redis = create_redis()
+    try:
+        rows = await redis.xrevrange(STREAM_DLQ, count=n)
+        if not rows:
+            await msg.answer("🧯 Очередь ошибок пуста")
+            return
+        lines = []
+        for _id, fields in rows:
+            f = {(k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v) for k, v in fields.items()}
+            lines.append(f"{f.get('stream')} {f.get('id')}: {f.get('reason', '')[:200]}")
+        await msg.answer("\n".join(lines))
+    finally:
+        await redis.aclose()
+
+
+@admin_router.message(Command("dlq_clear"))
+async def cmd_dlq_clear(msg: Message) -> None:
+    if not _is_admin(msg):
+        return
+    redis = create_redis()
+    try:
+        await redis.delete(STREAM_DLQ)
+    finally:
+        await redis.aclose()
+    await msg.answer("🧯 Очередь ошибок очищена")
+
+
+BROADCAST_KEY = "admin:broadcast:{admin}"
+
+
+@admin_router.message(Command("broadcast"))
+async def cmd_broadcast(msg: Message, cmd: CommandObject, session) -> None:
+    """Рассылка в два шага: /broadcast <текст> -> проверка -> /broadcast_confirm."""
+    if not _is_admin(msg):
+        return
+    text = (cmd.args or "").strip()
+    if not text:
+        await msg.answer("Формат: /broadcast <текст> (потом /broadcast_confirm)")
+        return
+    count = (await session.execute(select(func.count()).select_from(User).where(User.is_banned.is_(False)))).scalar_one()
+    redis = create_redis()
+    try:
+        await redis.set(BROADCAST_KEY.format(admin=msg.from_user.id), text.encode(), ex=600)
+    finally:
+        await redis.aclose()
+    await msg.answer(f"Отправить {count} пользователям?\n\n{text}\n\nПодтвердите: /broadcast_confirm (10 минут)")
+
+
+@admin_router.message(Command("broadcast_confirm"))
+async def cmd_broadcast_confirm(msg: Message, session) -> None:
+    if not _is_admin(msg):
+        return
+    redis = create_redis()
+    try:
+        raw = await redis.get(BROADCAST_KEY.format(admin=msg.from_user.id))
+        await redis.delete(BROADCAST_KEY.format(admin=msg.from_user.id))
+    finally:
+        await redis.aclose()
+    if not raw:
+        await msg.answer("Нет текста для рассылки (или прошло 10 минут): сначала /broadcast <текст>")
+        return
+    text = raw.decode()
+    ids = [r[0] for r in (await session.execute(select(User.tg_id).where(User.is_banned.is_(False)))).all()]
+    sent = failed = 0
+    for tg_id in ids:
+        try:
+            await msg.bot.send_message(tg_id, text)
+            sent += 1
+        except Exception:  # noqa: BLE001 — заблокировали бота и т. п.
+            failed += 1
+        await asyncio.sleep(0.05)  # ~20 сообщений/с, ниже лимита Telegram
+    await msg.answer(f"📣 Рассылка: отправлено {sent}, не доставлено {failed}")

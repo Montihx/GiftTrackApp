@@ -15,6 +15,7 @@ from aiogram.enums import ParseMode
 from loguru import logger
 
 from bot.admin import admin_router
+from bot.privacy import privacy_router
 from bot.handlers import router
 from core.config import get_settings
 from core.logging import setup_logging
@@ -40,6 +41,7 @@ async def _main() -> None:
     dp = Dispatcher()
     dp.include_router(router)
     dp.include_router(admin_router)
+    dp.include_router(privacy_router)
 
 
     redis = create_redis()
@@ -69,10 +71,16 @@ async def _main() -> None:
         logger.info("Бот запущен (polling)")
         await dp.start_polling(bot)
 
+    async def run_health() -> None:
+        from services.health_monitor import HealthMonitor
+
+        await HealthMonitor(bot, redis, settings).run(sm._stop_event)  # noqa: SLF001
+
     async def combined() -> None:
         dispatcher_task = asyncio.create_task(run_dispatcher())
         bot_task = asyncio.create_task(run_bot())
-        await asyncio.gather(dispatcher_task, bot_task)
+        health_task = asyncio.create_task(run_health())
+        await asyncio.gather(dispatcher_task, bot_task, health_task)
 
     try:
         await sm.run(combined)
