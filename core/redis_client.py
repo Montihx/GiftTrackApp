@@ -13,6 +13,8 @@ from core.config import get_settings
 STREAM_ALERTS_HOT = "alerts:hot"       # мгновенная доставка алертов
 STREAM_NFT_UPGRADES = "nft_upgrades"   # события mint/upgrade из TON-листенера
 STREAM_NFT_LISTINGS = "nft_listings"   # события листингов из маркетплейс-листенера
+STREAM_DLQ = "nft_dlq"                 # события, которые не удалось обработать за DISPATCH_MAX_ATTEMPTS попыток
+DISPATCHER_GROUP = "g:dispatcher"       # consumer group диспетчера (XREADGROUP + XACK)
 STREAM_NFT_SALES = "nft_sales"         # события продаж (TonAPI-sync) -> уведомление «GIFT SOLD!»
 
 

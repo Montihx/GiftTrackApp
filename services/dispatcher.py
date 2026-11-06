@@ -59,6 +59,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings, get_settings
 from core.redis_client import (
+    DISPATCHER_GROUP,
+    STREAM_DLQ,
     STREAM_NFT_LISTINGS,
     STREAM_NFT_SALES,
     STREAM_NFT_UPGRADES,
@@ -628,37 +630,116 @@ class NotificationDispatcher:
         return lines
 
 
-    async def run_loop(self, stop_event: asyncio.Event) -> None:
-        """Основной цикл: читает Redis Streams и обрабатывает события."""
-        logger.info("[dispatcher] старт")
-        last_ids = {STREAM_NFT_UPGRADES: "$", STREAM_NFT_LISTINGS: "$", STREAM_NFT_SALES: "$"}
+    # ---- шина событий: consumer group, XACK, повторы, DLQ, дедупликация (ТЗ 5.2, 5.4) ----
+    STREAMS = (STREAM_NFT_UPGRADES, STREAM_NFT_LISTINGS, STREAM_NFT_SALES)
 
+    async def _ensure_groups(self) -> None:
+        """Группа создаётся с «$»: накопленный до первого запуска хвост не разбираем, события только новые."""
+        for stream in self.STREAMS:
+            try:
+                await self.redis.xgroup_create(stream, DISPATCHER_GROUP, id="$", mkstream=True)
+            except Exception as exc:  # noqa: BLE001
+                if "BUSYGROUP" not in str(exc):
+                    raise
+
+    def _dedup_key(self, stream: str, payload: dict[str, Any]) -> str:
+        addr = payload.get("nft_address") or payload.get("slug") or payload.get("nft_name") or ""
+        kind = {STREAM_NFT_UPGRADES: "upgrade", STREAM_NFT_LISTINGS: "listing", STREAM_NFT_SALES: "sale"}[stream]
+        tail = payload.get("tx_hash") or payload.get("price_stars") or payload.get("price_ton") or ""
+        return f"dedup:ev:{kind}:{addr}:{tail}"
+
+    async def _handle_message(self, stream: str, payload: dict[str, Any]) -> None:
+        """Одно событие. Повторная доставка того же события (рестарт, XAUTOCLAIM) второй алерт не даёт."""
+        ok = await self.redis.set(self._dedup_key(stream, payload), b"1", nx=True, ex=self.settings.dispatch_dedup_ttl)
+        if not ok:
+            self.stats["dedup"] = self.stats.get("dedup", 0) + 1
+            return
+        try:
+            if stream == STREAM_NFT_UPGRADES:
+                await self.process_upgrade(payload)
+            elif stream == STREAM_NFT_LISTINGS:
+                await self.process_listing(payload)
+            elif stream == STREAM_NFT_SALES:
+                await self.process_sale(payload)
+        except BaseException:
+            # не обработали — снимаем отметку, чтобы повтор (в процессе или после рестарта) не посчитали дублем
+            await self.redis.delete(self._dedup_key(stream, payload))
+            raise
+
+    async def _process_with_retries(self, stream: str, msg_id: str, fields: dict[Any, Any]) -> None:
+        """До dispatch_max_attempts попыток с экспоненциальной паузой, затем событие в ev:dlq. Всегда завершается XACK."""
+        raw = fields.get(b"data") or fields.get("data")
+        reason = "нет поля data"
+        if raw is not None:
+            reason = ""
+            for attempt in range(1, self.settings.dispatch_max_attempts + 1):
+                try:
+                    payload = orjson.loads(raw.decode() if isinstance(raw, bytes) else raw)
+                    await self._handle_message(stream, payload)
+                    reason = ""
+                    break
+                except asyncio.CancelledError:
+                    raise  # не ACK: сообщение останется pending и будет забрано после рестарта
+                except Exception as exc:  # noqa: BLE001 — одно событие не останавливает диспетчер
+                    reason = repr(exc)
+                    self.stats["errors"] += 1
+                    logger.warning(f"[dispatcher] {stream} {msg_id}: попытка {attempt} не удалась: {reason}")
+                    try:
+                        await self.session.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if attempt < self.settings.dispatch_max_attempts:
+                        await asyncio.sleep(self.settings.dispatch_retry_base * 2 ** (attempt - 1))
+        if reason:
+            await self.redis.xadd(STREAM_DLQ, {"stream": stream, "id": msg_id, "reason": reason[:500],
+                                               "data": raw if raw is not None else ""}, maxlen=10_000, approximate=True)
+            self.stats["dlq"] = self.stats.get("dlq", 0) + 1
+            logger.error(f"[dispatcher] {stream} {msg_id} -> {STREAM_DLQ}: {reason}")
+        await self.redis.xack(stream, DISPATCHER_GROUP, msg_id)
+
+    async def _claim_stale(self, consumer: str) -> int:
+        """Сообщения, зависшие у упавшего потребителя (pending дольше dispatch_claim_idle_ms), — забираем и обрабатываем."""
+        done = 0
+        for stream in self.STREAMS:
+            res = await self.redis.xautoclaim(stream, DISPATCHER_GROUP, consumer,
+                                              min_idle_time=self.settings.dispatch_claim_idle_ms, start_id="0-0", count=50)
+            for msg_id, fields in (res[1] if res else []) or []:
+                if fields is None:  # сообщение уже вычищено из потока
+                    await self.redis.xack(stream, DISPATCHER_GROUP, msg_id)
+                    continue
+                await self._process_with_retries(stream, msg_id.decode() if isinstance(msg_id, bytes) else msg_id, fields)
+                done += 1
+        return done
+
+    async def run_loop(self, stop_event: asyncio.Event) -> None:
+        """Основной цикл: XREADGROUP по потокам событий, XACK после обработки, повторы и ev:dlq."""
+        import os
+        import time
+
+        consumer = f"c:{os.uname().nodename}:{os.getpid()}"
+        logger.info(f"[dispatcher] старт, consumer {consumer}")
+        await self._ensure_groups()
+        last_claim = 0.0
         while not stop_event.is_set():
             try:
-                # XREAD с блокировкой на 2 сек
-                response = await self.redis.xread(last_ids, block=2000, count=50)
+                if time.monotonic() - last_claim > 30:
+                    last_claim = time.monotonic()
+                    claimed = await self._claim_stale(consumer)
+                    if claimed:
+                        logger.info(f"[dispatcher] забрано зависших сообщений: {claimed}")
+                response = await self.redis.xreadgroup(
+                    DISPATCHER_GROUP, consumer, {s: ">" for s in self.STREAMS}, count=50, block=2000
+                )
                 for stream_name, messages in response or []:
                     stream_name = stream_name.decode() if isinstance(stream_name, bytes) else stream_name
                     for msg_id, fields in messages:
                         msg_id = msg_id.decode() if isinstance(msg_id, bytes) else msg_id
-                        last_ids[stream_name] = msg_id
-
-                        raw = fields.get(b"data") or fields.get("data")
-                        if raw is None:
-                            continue
-                        raw = raw.decode() if isinstance(raw, bytes) else raw
-                        payload = orjson.loads(raw)
-
-                        if stream_name == STREAM_NFT_UPGRADES:
-                            await self.process_upgrade(payload)
-                        elif stream_name == STREAM_NFT_LISTINGS:
-                            await self.process_listing(payload)
-                        elif stream_name == STREAM_NFT_SALES:
-                            await self.process_sale(payload)
+                        await self._process_with_retries(stream_name, msg_id, fields)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
                 logger.error(f"[dispatcher] итерация упала: {exc!r}", exc_info=True)
                 self.stats["errors"] += 1
+                await asyncio.sleep(1.0)
 
         logger.info(f"[dispatcher] остановлен, статистика: {self.stats}")
