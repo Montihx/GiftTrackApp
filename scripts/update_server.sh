@@ -68,6 +68,10 @@ while IFS= read -r line; do
   fi
 done < .env.example
 echo "  добавлено настроек: $added"
+# прежнее значение по умолчанию TONAPI_RPS=1 давало частые 429 на free-тарифе — поднять до нового (своё не трогаем)
+if grep -qx 'TONAPI_RPS=1' .env; then
+  sed -i 's/^TONAPI_RPS=1$/TONAPI_RPS=0.8/' .env && echo "  TONAPI_RPS: 1 -> 0.8"
+fi
 
 ask_secret() {  # ask_secret KEY "подсказка" — спросить, если пусто или нет в .env
   local key="$1" hint="$2" cur val

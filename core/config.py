@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     tonapi_url: str = Field(default="https://tonapi.io")
     tonapi_poll_interval: float = Field(default=15.0)
     # Общий лимит запросов к TonAPI на процесс (free-тариф tonconsole — 1 RPS; на платном поднимите)
-    tonapi_rps: float = Field(default=1.0)
+    tonapi_rps: float = Field(default=0.8)  # чуть ниже лимита: ровно 1.0 даёт частые 429 на границе окна
     # Постраничный скан: сколько страниц (по 1000 items) на коллекцию за цикл. Коллекция больше
     # pages*1000 сканируется за несколько циклов; floor/атрибуты пересчитываются по завершении прохода.
     tonapi_pages_per_cycle: int = Field(default=3, ge=1)
