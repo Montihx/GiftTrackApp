@@ -28,9 +28,9 @@ Redis 7 · React 18 + Vite (TWA) · Docker Compose · Nginx · CryptoBot API
 
 ```
 core/       config, logging, redis, retry, graceful shutdown, ton_address
-db/         модели SQLAlchemy 2.0, Alembic-миграции (0001–0003), seed/gift_collections.json
+db/         модели SQLAlchemy 2.0, Alembic-миграции (0001–0004), seed/gift_collections.json
 bot/        точки входа сервисов (bot/*_main.py), handlers, admin-команды
-services/   tonapi + tonapi_sync (TonAPI), market/ (GetGems), ton/ (Tonviewer), updater, floors,
+services/   tonapi + tonapi_sync + gift_discovery (TonAPI), market/ (GetGems), ton/ (Tonviewer), updater, floors,
             seed, showcase, dispatcher, resolver/, payments, collection_discovery
 api/        FastAPI: витрина (/api/collections, /api/items, /api/favorites, /api/subscription),
             фильтры (/api/filters), SSE, вебхук /api/payments/webhook/<secret>
@@ -117,6 +117,17 @@ docker compose restart resolver
 описанием — по имени адрес не выбирать. Seed применяется при старте `updater` (идемпотентно;
 плейсхолдер `tg_gift:<slug>` заменяется адресом, пустая иконка дозаполняется).
 
+**Новые коллекции — автоматически (нужен `TONAPI_KEY`).** `services/gift_discovery.py` в
+`listener-market` раз в `TONAPI_DISCOVERY_INTERVAL` (1 ч) читает `TONAPI_DISCOVERY_PAGES` (5) страниц
+NFT кошелька «Fragment Gift Minter» (`0:158136…6c07`): улучшенные, но не выведенные подарки лежат
+у него, поэтому там видны почти все коллекции, включая только что вышедшие (на странице из 1000
+NFT — 100+ коллекций). Новая коллекция добавляется в БД (`source='tonapi'`, имя в единственном
+числе, иконка с fragment), только если её контракт развёрнут этим кошельком и метаданные отдаются
+с `nft.fragment.com/collection/<slug>.json` — подделки (их в TonAPI десятки на каждую коллекцию)
+так не проходят. Отклонённые адреса запоминаются в Redis. Добавленную коллекцию TonAPI-sync
+начинает сканировать в том же цикле, она сразу появляется на витрине и в форме фильтров.
+Выключить: `TONAPI_DISCOVERY_ENABLED=false` (останется seed-каталог).
+
 **TonAPI (основной источник, нужен `TONAPI_KEY`)** — `services/tonapi_sync.py` в `listener-market`:
 постранично читает `GET /v2/nfts/collections/{addr}/items` и сравнивает с прошлым состоянием
 предмета (Redis-хэш на коллекцию):
@@ -157,6 +168,9 @@ docker compose restart resolver
 | `TONAPI_POLL_INTERVAL` | 15 | пауза между циклами TonAPI-синхронизации, с |
 | `TONAPI_RPS` | 1 | лимит запросов к TonAPI на процесс |
 | `TONAPI_PAGES_PER_CYCLE` | 3 | страниц по 1000 items на коллекцию за цикл |
+| `TONAPI_DISCOVERY_ENABLED` | true | автодобавление новых коллекций Telegram Gifts |
+| `TONAPI_DISCOVERY_INTERVAL` | 3600 | период автообнаружения, с |
+| `TONAPI_DISCOVERY_PAGES` | 5 | страниц NFT минтера за один запуск автообнаружения |
 | `TONVIEWER_ENABLED` | false | включить `listener-ton` (Tonviewer API сейчас недоступен) |
 | `SUB_PRICE_USD_30/60/90` | 49 / 89 / 119 | цены тарифов, $ (инвойс CryptoBot в USD, оплата TON/USDT) |
 | `VITE_OWNER_USERNAME` | пусто | username владельца для «Не получается оплатить? → Написать владельцу» (build-arg фронтенда) |

@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     # Постраничный скан: сколько страниц (по 1000 items) на коллекцию за цикл. Коллекция больше
     # pages*1000 сканируется за несколько циклов; floor/атрибуты пересчитываются по завершении прохода.
     tonapi_pages_per_cycle: int = Field(default=3, ge=1)
+    # Автообнаружение новых коллекций Telegram Gifts (listener-market, только с TONAPI_KEY):
+    # раз в interval читаем pages страниц NFT кошелька Fragment Gift Minter, новые коллекции
+    # проверяем (деплоер = минтер, метаданные nft.fragment.com) и добавляем в БД.
+    tonapi_discovery_enabled: bool = Field(default=True)
+    tonapi_discovery_interval: float = Field(default=3600.0)
+    tonapi_discovery_pages: int = Field(default=5, ge=1)
     # Seed-каталог коллекций (upsert при старте updater)
     seed_catalog_path: str = Field(default="db/seed/gift_collections.json")
     telegram_api_base: str = Field(

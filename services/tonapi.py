@@ -110,6 +110,31 @@ class TonApiClient:
         )
         return (page or {}).get("nft_items") or []
 
+    async def fetch_account_nfts(self, account: str, offset: int, limit: int = PAGE_LIMIT) -> list[dict[str, Any]]:
+        """NFT, которыми владеет аккаунт (GET /v2/accounts/{account}/nfts)."""
+        page = await self._get(
+            f"/v2/accounts/{account}/nfts",
+            params={"limit": str(limit), "offset": str(offset), "indirect_ownership": "false"},
+            context=f"account_nfts[{account[:8]}…@{offset}]",
+        )
+        return (page or {}).get("nft_items") or []
+
+    async def fetch_collection(self, address: str) -> dict[str, Any]:
+        """Коллекция: metadata, metadata_status.url, trust, approved_by (GET /v2/nfts/collections/{a})."""
+        return await self._get(f"/v2/nfts/collections/{address}", context=f"collection[{address[:8]}…]") or {}
+
+    async def fetch_deployer(self, address: str) -> str | None:
+        """Отправитель первой транзакции аккаунта (для контракта — тот, кто его развернул)."""
+        data = await self._get(
+            f"/v2/blockchain/accounts/{address}/transactions",
+            params={"limit": "1", "sort_order": "asc"},
+            context=f"deployer[{address[:8]}…]",
+        )
+        txs = (data or {}).get("transactions") or []
+        if not txs:
+            return None
+        return (((txs[0].get("in_msg") or {}).get("source")) or {}).get("address")
+
     async def fetch_ton_usd(self) -> float | None:
         """Курс TON->USD (GET /v2/rates?tokens=ton&currencies=usd) или None."""
         try:

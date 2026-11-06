@@ -46,6 +46,7 @@ from core.redis_client import (
 )
 from db.models import Attribute, Collection, NftOwnershipHistory, ProcessedNft, Sale
 from services.floors import apply_collection_floor
+from services.gift_discovery import GiftCollectionDiscovery
 from services.market.events import ListingEvent, listing_to_stream_payload
 from services.tonapi import PAGE_LIMIT, TonApiClient, parse_ton_price
 
@@ -190,8 +191,11 @@ class TonApiSync:
         self.client = client or TonApiClient(settings)
         self.page_limit = page_limit
         self.stats = {"listings": 0, "sales": 0, "transfers": 0, "passes": 0, "errors": 0}
+        self.discovery = GiftCollectionDiscovery(session, redis, settings, self.client)
 
     async def process_collections(self) -> None:
+        self.discovery.client = self.client  # один клиент (и rate limiter) на sync и discovery
+        await self.discovery.maybe_run()  # новые коллекции Telegram Gifts -> БД (раз в interval)
         rows = (await self.session.execute(
             select(Collection.id, Collection.name, Collection.contract_address)
             .where(~Collection.contract_address.startswith("tg_gift:"))
