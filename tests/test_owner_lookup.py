@@ -149,3 +149,20 @@ async def test_number_and_price_ranges_filter_alerts(session: Any) -> None:
     bot.send_message.reset_mock()
     await d.process_listing({**base, "nft_name": "Plush Pepe #500", "price_ton": 60})
     assert sorted(c[0][0] for c in bot.send_message.call_args_list) == [42]
+
+
+async def test_any_gift_filter_matches_every_collection(session: Any) -> None:
+    from services.dispatcher import NotificationDispatcher
+
+    coll = Collection(name="Plush Pepe", contract_address="EQany_gift", source="seed")
+    session.add_all([coll, User(tg_id=51)])
+    await session.flush()
+    session.add(Filter(user_id=51, collection_id=None, is_active=True, require_owner=False))  # «Любой подарок»
+    await session.commit()
+    bot, redis, resolver = AsyncMock(), AsyncMock(), AsyncMock()
+    redis.get = AsyncMock(return_value=None)
+    resolver.resolve = AsyncMock(return_value={})
+    d = NotificationDispatcher(bot=bot, session=session, redis=redis, resolver=resolver)
+    await d.process_listing({"collection_id": str(coll.id), "marketplace": "getgems", "nft_name": "Plush Pepe #5",
+                             "nft_index": 5, "price_ton": 10, "seller_ton": "0:seller", "attributes": {}})
+    assert [c[0][0] for c in bot.send_message.call_args_list] == [51]

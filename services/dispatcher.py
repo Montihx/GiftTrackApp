@@ -54,7 +54,7 @@ import uuid
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings, get_settings
@@ -416,7 +416,8 @@ class NotificationDispatcher:
         """
         stmt = select(Filter).where(Filter.is_active.is_(True))
         if collection_id:
-            stmt = stmt.where(Filter.collection_id == collection_id)
+            # фильтр «Любой подарок» (collection_id IS NULL) подходит к любой коллекции
+            stmt = stmt.where(or_(Filter.collection_id == collection_id, Filter.collection_id.is_(None)))
         filters = (await self.session.execute(stmt)).scalars().all()
 
         if not filters:

@@ -237,3 +237,17 @@ def test_apply_tg_best_floor_is_min_over_onchain_and_markets() -> None:
     only = {"floor_price": 20.0}
     _apply_tg(only, {"market_floors": {"portals": 30.0}})
     assert only["best_floor"] == 20.0 and only["best_floor_source"] == "onchain"
+
+
+def test_suspect_onchain_floor_is_ignored_for_best_floor() -> None:
+    from api.showcase import _apply_tg
+
+    cat = {"floor_price": 15.0}
+    _apply_tg(cat, {"market_floors": {"mrkt": 281.0, "portals": 288.0}})  # Scared Cat: 15 против ~285
+    assert cat["onchain_suspect"] is True and cat["best_floor"] == 281.0 and cat["best_floor_source"] == "mrkt"
+    pepe = {"floor_price": 7300.0}
+    _apply_tg(pepe, {"market_floors": {"mrkt": 7293.0, "portals": 7400.0}})
+    assert pepe["onchain_suspect"] is False and pepe["best_floor"] == 7293.0
+    alone = {"floor_price": 15.0}
+    _apply_tg(alone, {})  # маркетов нет — сравнивать не с чем, ончейн остаётся
+    assert alone["onchain_suspect"] is False and alone["best_floor"] == 15.0
