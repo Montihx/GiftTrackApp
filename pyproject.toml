@@ -25,6 +25,7 @@ dependencies = [
     "pytoniq-core>=0.1.31",          # Адреса TON, cell, parse
     # --- Telegram userbot (cold path resolver) ---
     "telethon>=1.36",
+    "qrcode>=7.4",                   # QR-вход Telethon (bot.resolver_main --login-qr)
     # --- Прочее ---
     "PyJWT>=2.9",                    # (не используется напрямую, HMAC через hashlib)
     "python-multipart>=0.0.9",

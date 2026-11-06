@@ -99,6 +99,9 @@ Telegram открывает TWA только по HTTPS; адрес задаёт
 аккаунт, не основной), затем один раз войдите (код из Telegram):
 
 ```bash
+# вход по QR (код вводить не нужно): Telegram → Настройки → Устройства → Подключить устройство
+docker compose run --rm -it resolver python -m bot.resolver_main --login-qr
+# или по коду из Telegram:
 docker compose run --rm -it resolver python -m bot.resolver_main --login
 docker compose restart resolver
 ```
