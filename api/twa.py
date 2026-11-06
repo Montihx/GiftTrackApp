@@ -1,7 +1,7 @@
 # /workspace/api/twa.py — роутеры TWA API
 """
 Endpoints для Telegram Web App:
-  GET    /api/collections            — все коллекции с атрибутами и floor
+  (GET /api/collections и остальная витрина — в api/showcase.py)
   GET    /api/filters                — список фильтров пользователя
   POST   /api/filters                — создать фильтр
   DELETE /api/filters/{filter_id}    — удалить фильтр
@@ -60,58 +60,6 @@ def _parse_user_id(init_data: dict[str, Any]) -> int:
     except (ValueError, KeyError):
         raise HTTPException(status_code=401, detail="Bad user payload")
 
-
-@router.get("/collections")
-async def get_collections() -> dict[str, Any]:
-    """Все коллекции с атрибутами (model/background/symbol/pattern) и floor-ценами."""
-    from core.redis_client import create_redis
-
-    redis = create_redis()
-    try:
-        async with session_scope() as session:
-            stmt = select(Collection).where(~Collection.contract_address.startswith("tg_gift:"))
-            collections = (await session.execute(stmt)).scalars().all()
-
-            result = []
-            for coll in collections:
-                attrs_stmt = select(Attribute).where(Attribute.collection_id == coll.id)
-                attrs = (await session.execute(attrs_stmt)).scalars().all()
-
-                # Floor из Redis (быстрый путь) или из БД
-                floor = await cache_get_json(redis, floor_key(str(coll.id)))
-                if floor is None:
-                    floor = float(coll.floor_price) if coll.floor_price is not None else None
-
-                result.append(
-                    {
-                        "id": str(coll.id),
-                        "name": coll.name,
-                        "icon_url": coll.icon_url,
-                        "floor_price": floor,
-                        "items_count": coll.items_count,
-                        "attributes": {
-                            "models": [
-                                {"id": str(a.id), "value": a.value, "icon_url": a.icon_url, "count": a.items_count}
-                                for a in attrs if a.type == "model"
-                            ],
-                            "backgrounds": [
-                                {"id": str(a.id), "value": a.value, "icon_url": a.icon_url, "count": a.items_count}
-                                for a in attrs if a.type == "background"
-                            ],
-                            "symbols": [
-                                {"id": str(a.id), "value": a.value, "icon_url": a.icon_url, "count": a.items_count}
-                                for a in attrs if a.type == "symbol"
-                            ],
-                            "patterns": [
-                                {"id": str(a.id), "value": a.value, "icon_url": a.icon_url, "count": a.items_count}
-                                for a in attrs if a.type == "pattern"
-                            ],
-                        },
-                    }
-                )
-            return {"collections": result}
-    finally:
-        await redis.aclose()
 
 @router.get("/filters")
 async def get_filters(
@@ -194,11 +142,24 @@ async def collection_stream(collection_id: str) -> StreamingResponse:
     async def event_generator():
         from core.redis_client import create_redis
 
+        from services import showcase as sc
+
         redis = create_redis()
+        cid = sc.parse_uuid(collection_id)
         try:
             while True:
                 floor = await cache_get_json(redis, floor_key(collection_id))
-                payload = {"floor_price": floor}
+                change = None
+                if cid is not None:
+                    try:
+                        async with session_scope() as session:
+                            if floor is None:
+                                coll = await session.get(Collection, cid)
+                                floor = float(coll.floor_price) if coll and coll.floor_price is not None else None
+                            change = (await sc.floor_changes_24h(session, {cid: floor}))[cid]
+                    except Exception as exc:  # noqa: BLE001 — стрим живёт и без БД
+                        logger.debug(f"stream {collection_id}: change не посчитан: {exc!r}")
+                payload = {"floor_price": floor, "floor_24h_change": change}
                 yield f"data: {json.dumps(payload)}\n\n"
                 await asyncio.sleep(5)
         finally:
