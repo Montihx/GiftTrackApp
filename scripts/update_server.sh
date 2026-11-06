@@ -1,25 +1,61 @@
 #!/usr/bin/env bash
 # scripts/update_server.sh — обновление GiftTrackApp на сервере одной командой
-#   cd ~/gifts/GiftTrackApp && bash scripts/update_server.sh
-# Что делает: бэкап .env -> git pull main -> дописывает новые настройки (ничего не удаляет) ->
-# спрашивает недостающие ключи (ввод скрыт) -> сборка и запуск -> вход Telegram по QR -> проверка логов.
+#   cd ~/gifts/GiftTrackApp
+#   git fetch origin main && git show origin/main:scripts/update_server.sh > /tmp/gt_update.sh && bash /tmp/gt_update.sh
+# (скрипт берётся из свежего main, а копии и проверка правок выполняются ДО обновления кода)
+# Что делает: бэкап .env и базы -> git pull main (остановится, если есть локальные правки) ->
+# дописывает новые настройки (ничего не удаляет) -> спрашивает недостающие ключи (ввод скрыт) ->
+# сборка и запуск (миграции — сервис migrate) -> вход Telegram по QR -> проверка логов.
+# Подходит и для очень старой версии на сервере: данные в docker-томах сохраняются.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(git rev-parse --show-toplevel 2>/dev/null || { echo "Запустите из папки проекта (cd ~/gifts/GiftTrackApp)"; exit 1; })"
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 trap 'echo; echo "Скрипт остановился на ошибке (строка $LINENO). Ничего не удалено; .env сохранён в .env.bak.*"; echo "Если мешают локальные правки: git status — и пришлите вывод."' ERR
 
 [ -f .env ] || { echo "Нет .env: скопируйте .env.example в .env и заполните BOT_TOKEN, DB_PASS и т.д."; exit 1; }
 
-say "1/6 Резервная копия .env"
-cp .env ".env.bak.$(date +%Y%m%d-%H%M%S)"   # *.bak в .gitignore
+STAMP="$(date +%Y%m%d-%H%M%S)"
+say "1/7 Резервная копия .env"
+cp .env ".env.bak.$STAMP"   # .env.bak* в .gitignore
+echo "  .env.bak.$STAMP"
 
-say "2/6 Обновление кода (main)"
+say "2/7 Резервная копия базы (до миграций)"
+mkdir -p backups
+DUMP="backups/db-$STAMP.sql.gz"
+pg=""
+if docker compose ps --status running --services 2>/dev/null | grep -qx postgres; then
+  pg="compose"
+elif docker ps --format '{{.ID}} {{.Image}}' | grep -q ' postgres'; then
+  pg="$(docker ps --format '{{.ID}} {{.Image}}' | grep ' postgres' | head -n1 | cut -d' ' -f1)"
+fi
+if [ "$pg" = "compose" ]; then
+  { docker compose exec -T postgres pg_dump -U gt -d gifttrack | gzip > "$DUMP"; } || rm -f "$DUMP"
+elif [ -n "$pg" ]; then
+  { docker exec -i "$pg" pg_dump -U gt -d gifttrack | gzip > "$DUMP"; } || rm -f "$DUMP"
+fi
+if [ -s "$DUMP" ]; then
+  echo "  $DUMP ($(du -h "$DUMP" | cut -f1)). Восстановление при необходимости:"
+  echo "  gunzip -c $DUMP | docker compose exec -T postgres psql -U gt -d gifttrack"
+else
+  rm -f "$DUMP"
+  read -r -p "  Postgres не найден или копия пустая. Продолжить без копии базы? [y/N] " yn
+  [ "$yn" = "y" ] || { echo "  Остановлено."; exit 1; }
+fi
+
+say "3/7 Обновление кода (main)"
+dirty="$(git status --porcelain --untracked-files=no)"
+if [ -n "$dirty" ]; then
+  echo "  На сервере изменены файлы проекта — обновление их бы перезаписало:"
+  echo "$dirty" | sed 's/^/    /'
+  echo "  Ничего не трогаю. Пришлите этот список — подскажу, как сохранить правки."
+  exit 1
+fi
 git fetch origin main
 git checkout main
 git pull --ff-only origin main
 
-say "3/6 Новые настройки в .env (существующие значения не трогаются)"
+say "4/7 Новые настройки в .env (существующие значения не трогаются)"
 added=0
 while IFS= read -r line; do
   case "$line" in ''|'#'*) continue ;; esac
@@ -52,18 +88,18 @@ PY
   fi
   echo "  $key: сохранён"
 }
-say "4/6 Ключи (ввод не отображается)"
+say "5/7 Ключи (ввод не отображается)"
 ask_secret TONAPI_KEY "ключ tonconsole.com"
 ask_secret API_ID "my.telegram.org -> API development tools -> App api_id"
 ask_secret API_HASH "там же, App api_hash"
 ask_secret PHONE "номер этого Telegram-аккаунта, +7..."
 
-say "5/6 Сборка и запуск (по одному сервису — бережёт память)"
+say "6/7 Сборка и запуск (по одному сервису — бережёт память; миграции применит migrate)"
 COMPOSE_PARALLEL_LIMIT=1 docker compose build
-docker compose up -d
+docker compose up -d --remove-orphans   # контейнеры сервисов из старой версии, которых больше нет, — убрать
 docker compose ps
 
-say "6/6 Вход в Telegram для маркета подарков и резолвера"
+say "7/7 Вход в Telegram для маркета подарков и резолвера"
 if docker compose run --rm -T resolver python - <<'PY'
 import asyncio, sys
 from bot.resolver_main import _make_client
@@ -95,6 +131,6 @@ echo "--- listener-market (ожидается: «подключён к пото�
 docker compose logs --tail=200 listener-market | grep -E "tonapi_stream|market_listener|tonapi_sync" | tail -n 5 || true
 echo "--- resolver (ожидается: «Telethon worker запущен», «[tg_market] каталог: N коллекций»)"
 docker compose logs --tail=200 resolver | grep -E "Telethon|tg_market" | tail -n 5 || true
-echo "--- migrate"
-docker compose logs --tail=20 migrate | tail -n 3 || true
+echo "--- migrate (ожидается: «Running upgrade … -> 0004» или без ошибок)"
+docker compose logs --tail=40 migrate | grep -E "upgrade|Error|error" | tail -n 6 || true
 say "Готово. Пришлите эти строки (без ключей) для проверки."

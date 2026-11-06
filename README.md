@@ -51,12 +51,14 @@ docker compose ps
 docker compose logs -f bot
 ```
 
-**Обновление уже работающего сервера** — одной командой (бэкап `.env`, `git pull`, новые настройки в
+**Обновление уже работающего сервера** (подходит и для очень старой версии; данные в docker-томах
+сохраняются) — одной командой (бэкап `.env` и базы, проверка локальных правок, `git pull`, новые настройки в
 `.env` без изменения старых, запрос недостающих ключей со скрытым вводом, сборка, запуск, вход Telegram
 по QR, проверка логов):
 
 ```bash
-cd ~/gifts/GiftTrackApp && git pull origin main && bash scripts/update_server.sh
+cd ~/gifts/GiftTrackApp
+git fetch origin main && git show origin/main:scripts/update_server.sh > /tmp/gt_update.sh && bash /tmp/gt_update.sh
 ```
 
 `migrate` отрабатывает автоматически, остальные сервисы ждут его завершения.
