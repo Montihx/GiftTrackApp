@@ -223,6 +223,7 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 | `TONAPI_DISCOVERY_INTERVAL` | 3600 | период автообнаружения, с |
 | `TONAPI_DISCOVERY_PAGES` | 5 | страниц NFT минтера за один запуск автообнаружения |
 | `TONVIEWER_ENABLED` | false | включить `listener-ton` (Tonviewer API сейчас недоступен) |
+| `SHOWCASE_CACHE_TTL` | 10 | кэш лёгкого списка коллекций в API, с (0 — выкл) |
 | `TG_MARKET_ENABLED` | true | листинги маркета подарков Telegram (сервис `resolver`, нужен вход Telethon) |
 | `TG_MARKET_INTERVAL` | 2 | пауза между запросами листингов к Telegram, с |
 | `TG_MARKET_CATALOG_INTERVAL` | 300 | обновление каталога и флоров маркета Telegram, с |

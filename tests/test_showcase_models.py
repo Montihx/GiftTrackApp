@@ -113,3 +113,53 @@ async def test_favorite_items_enriched_with_name_and_model(session) -> None:
     assert items["0:fav"]["name"] == "Plush Pepe #2" and items["0:fav"]["model"] == "Hothead"
     assert items["0:fav"]["icon_url"] == "https://x/i.webp"
     assert items["0:unknown"]["name"] is None
+
+
+async def test_collections_list_is_light_and_attributes_load_per_collection(session) -> None:
+    from decimal import Decimal
+
+    from db.models import Attribute, Collection
+    from services.showcase import list_collection_attributes, list_collections
+
+    a = Collection(name="Alpha", contract_address="EQlight_a", source="seed", items_count=100)
+    b = Collection(name="Beta", contract_address="tg_gift:beta", source="seed")
+    session.add_all([a, b])
+    await session.flush()
+    session.add_all([
+        Attribute(collection_id=a.id, type="model", value="Zed", items_count=5, floor_price=Decimal("9")),
+        Attribute(collection_id=a.id, type="model", value="Amy", items_count=50),
+        Attribute(collection_id=a.id, type="background", value="Red", items_count=0),
+        Attribute(collection_id=a.id, type="symbol", value="Moon", items_count=2),
+    ])
+    await session.commit()
+
+    rows = {c["name"]: c for c in await list_collections(session)}
+    alpha = rows["Alpha"]
+    assert alpha["attributes"] == {"models": [], "backgrounds": [], "symbols": [], "patterns": []}  # лёгкий ответ
+    assert alpha["rarity_summary"]["models"] == 2 and alpha["rarity_summary"]["backgrounds"] == 1
+    # самый редкий = минимальный положительный items_count (Moon: 2 из 100 = 2%), нулевые не считаются
+    assert alpha["rarity_summary"]["rarest"] == {"type": "symbol", "value": "Moon", "rarity": 2.0}
+    assert rows["Beta"]["trackable"] is False and rows["Beta"]["rarity_summary"]["rarest"] is None
+
+    full = await list_collection_attributes(session, a.id)
+    assert full is not None and [m["value"] for m in full["attributes"]["models"]] == ["Amy", "Zed"]
+    assert full["attributes"]["models"][1]["floor"] == 9.0 and full["attributes"]["symbols"][0]["count"] == 2
+    assert await list_collection_attributes(session, __import__("uuid").uuid4()) is None
+
+
+async def test_floor_change_uses_latest_snapshot_before_cutoff(session) -> None:
+    import datetime as dt
+    from decimal import Decimal
+
+    from db.models import Collection, FloorSnapshot
+    from services.showcase import floor_changes_24h
+
+    c = Collection(name="Gamma", contract_address="EQchange_g", source="seed")
+    session.add(c)
+    await session.flush()
+    now = dt.datetime.now(dt.timezone.utc)
+    for hours, price in ((72, 50), (30, 100), (26, 110), (5, 130), (1, 140)):
+        session.add(FloorSnapshot(collection_id=c.id, price=Decimal(price), ts=now - dt.timedelta(hours=hours)))
+    await session.commit()
+    out = await floor_changes_24h(session, {c.id: Decimal(121)}, now)
+    assert out[c.id] == 10.0  # база — самый поздний снимок старше 24ч (26ч назад = 110)
