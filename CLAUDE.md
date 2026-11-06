@@ -26,7 +26,7 @@ cd frontend && npm install && npm run build
 ## Устройство
 Стек: Python 3.11, FastAPI, aiogram 3, SQLAlchemy 2 async (Postgres в проде, SQLite в тестах), Alembic (миграции 0001–0006 в `db/migrations/versions`), Redis, Telethon (MTProto), aiohttp; фронтенд React+Vite; nginx; docker compose.
 
-Сервисы docker compose: `postgres`, `redis`, `migrate`, `bot`, `listener-ton` (отключён: Tonviewer API мёртв, `TONVIEWER_ENABLED=false`), `listener-market`, `resolver`, `updater`, `twa-api`, `twa-frontend`, `nginx`.
+Сервисы docker compose: `postgres`, `redis`, `migrate`, `bot`, `listener-market`, `resolver`, `updater`, `twa-api`, `twa-frontend`, `nginx`.
 
 Основные модули:
 - `services/tonapi.py`, `tonapi_sync.py`, `tonapi_stream.py` — TonAPI (free 1 RPS, `TONAPI_RPS=0.8`): постраничный скан коллекций, SSE-поток переводов NFT, определение листингов/продаж, пересчёт флоров. Сигнатура «продажа» — смена владельца у листингового предмета; «неуверенные» снимки игнорируются.
@@ -34,7 +34,7 @@ cd frontend && npm install && npm run build
 - `services/telegram_market.py` — маркет подарков Telegram через Telethon (`payments.getStarGifts`, `getResaleStarGifts`, `getStarGiftUpgradeAttributes`): новые листинги в поток `nft_listings`, число выпущенных («Выпущено»), атрибуты новых коллекций. Дедуп листингов по слагу + порог смены цены 5%; предохранитель `TG_MARKET_MAX_NEW`.
 - `services/market_floors.py` — флоры MRKT и Portals: вход через мини-приложение маркета вашим Telegram-аккаунтом (`requestAppWebView`), дальше обычный HTTP; 403/429/503 → пауза, без обхода.
 - `services/owner_lookup.py` — владелец и «оценка» подарка из Telegram по slug (воркер в `resolver`).
-- `services/resolver/` — резолвер TON-адреса → Telegram. Шаги Tonviewer мёртвы и пропускаются; 4xx не ретраятся (`core/retry.py: PermanentError`), недоступный шаг на паузе 10 минут.
+- `services/resolver/` — резолвер TON-адреса → Telegram. кэш → БД `wallet_tg_map` (связки из bio) → очередь Telethon; внешних API нет. 4xx не ретраятся (`core/retry.py: PermanentError`).
 - `services/dispatcher.py` — читает потоки Redis `nft_listings`, `nft_sales`, `nft_upgrades` обычным XREAD (без consumer-групп), подбирает фильтры, шлёт алерты. ВАЖНО: перед поиском владельца идёт дешёвая проверка `_has_candidates` — иначе очередь копится (воркер владельцев отвечает ~1 запрос/с, событий сотни в минуту).
 - `api/` — FastAPI для мини-приложения: `twa.py` (фильтры, избранное), `showcase.py` (витрина: флоры, `issued_count`, `best_floor`, флоры маркетов, недостоверный ончейн-флор), `payments.py` (CryptoBot).
 - `frontend/src/` — `App.jsx` (фильтры), `Home.jsx` (витрина), `CollectionPage.jsx`, `Subscription.jsx`, `Favorites.jsx`, `api.js` (`cachedGet`, `COIN`, `fmtTon`).

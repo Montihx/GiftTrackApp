@@ -287,9 +287,9 @@ async def test_market_listener_uses_tonapi_when_key_set(session: Any) -> None:
     assert (await session.execute(select(ProcessedNft))).scalar_one().nft_address == "0:a"
 
 
-def test_market_listener_without_key_keeps_getgems() -> None:
-    listener = MarketListener(session=None, redis=None, settings=Settings(onchain_listings_enabled=True, onchain_upgrades_enabled=True, tonapi_key=""))  # type: ignore[arg-type]
-    assert listener._tonapi_sync is None
+def test_market_listener_without_key_is_idle() -> None:
+    listener = MarketListener(session=None, redis=None, settings=Settings(tonapi_key=""))  # type: ignore[arg-type]
+    assert listener._tonapi_sync is None  # без ключа скан не запускается (GetGems GraphQL удалён)
 
 
 # --- ложные продажи, компактное состояние, поток реального времени, приоритет --------------------
