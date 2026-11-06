@@ -106,6 +106,18 @@ class Settings(BaseSettings):
     subscription_price_ton: float = Field(default=10.0, description="Цена подписки в TON")
     subscription_days: int = Field(default=30, description="Длительность подписки в днях")
     admin_tg_ids: str = Field(default="", description="TG ID админов через запятую")
+    # Тарифы премиума (USD): 30/60/90 дней. Оплата — инвойс CryptoBot в фиате USD
+    sub_price_usd_30: float = Field(default=49.0)
+    sub_price_usd_60: float = Field(default=89.0)
+    sub_price_usd_90: float = Field(default=119.0)
+
+    @property
+    def subscription_plans(self) -> list[dict]:
+        return [
+            {"id": "month1", "title": "1 месяц", "days": 30, "price_usd": self.sub_price_usd_30},
+            {"id": "month2", "title": "2 месяца", "days": 60, "price_usd": self.sub_price_usd_60},
+            {"id": "month3", "title": "3 месяца", "days": 90, "price_usd": self.sub_price_usd_90},
+        ]
 
     @property
     def tonapi_enabled(self) -> bool:
