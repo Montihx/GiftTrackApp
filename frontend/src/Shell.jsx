@@ -2,6 +2,7 @@
 import { useEffect } from "react";
 import CollectionPage from "./CollectionPage.jsx";
 import Favorites from "./Favorites.jsx";
+import Feed from "./Feed.jsx";
 import Filters from "./App.jsx";
 import Home from "./Home.jsx";
 import ItemPage from "./ItemPage.jsx";
@@ -11,6 +12,7 @@ import { goBack, navigate, useHashRoute } from "./router";
 import { TabBar } from "./ui";
 
 const TABS = [
+  { id: "feed", label: "Лента", icon: "⚡", path: "feed" },
   { id: "home", label: "Витрина", icon: "💎", path: "" },
   { id: "fav", label: "Избранное", icon: "★", path: "fav" },
   { id: "filters", label: "Фильтры", icon: "🔔", path: "filters" },
@@ -18,7 +20,7 @@ const TABS = [
 ];
 
 function activeTab(route) {
-  return ["fav", "filters", "sub"].includes(route.name) ? route.name : "home";
+  return ["feed", "fav", "filters", "sub"].includes(route.name) ? route.name : "home";
 }
 
 export default function Shell() {
@@ -52,6 +54,7 @@ export default function Shell() {
   if (route.name === "filters") screen = <Filters />;
   if (route.name === "collection") screen = <CollectionPage key={route.id} id={route.id} />;
   if (route.name === "item") screen = <ItemPage key={route.address} address={route.address} />;
+  if (route.name === "feed") screen = <Feed />;
   if (route.name === "fav") screen = <Favorites />;
   if (route.name === "sub") screen = <Subscription />;
 

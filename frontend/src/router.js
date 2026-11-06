@@ -17,6 +17,7 @@ export function parseHash(hash) {
   const arg = parts[1];
   if (head === "c" && arg) return { name: "collection", id: arg };
   if (head === "i" && arg) return { name: "item", address: arg };
+  if (head === "feed") return { name: "feed" };
   if (head === "fav") return { name: "fav" };
   if (head === "filters") return { name: "filters" };
   if (head === "sub") return { name: "sub" };

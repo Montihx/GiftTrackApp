@@ -331,3 +331,24 @@ async def create_subscription_invoice(
         fiat="USD",
     )
     return {"pay_url": invoice["pay_url"]}
+
+
+@router.get("/feed")
+async def get_feed(
+    kind: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    init_data: dict = Depends(get_current_user_init_data),
+) -> dict[str, Any]:
+    """Лента сигналов пользователя (последние алерты): ?kind=upgrade|listing|sale."""
+    from core.redis_client import create_redis
+    from services.feed import read_cards
+
+    uid = _parse_user_id(init_data)
+    redis = create_redis()
+    try:
+        return {"cards": await read_cards(redis, uid, kind, limit)}
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"feed: {exc!r}")
+        return {"cards": []}
+    finally:
+        await redis.aclose()
