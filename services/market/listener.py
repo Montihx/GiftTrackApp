@@ -258,6 +258,12 @@ class MarketListener:
         source = "TonAPI" if self._tonapi_sync is not None else "GetGems"
         logger.info(f"[market_listener] старт, источник {source}, интервал {interval}s")
 
+        stream_task: asyncio.Task[None] | None = None
+        if self._tonapi_sync is not None and self.settings.tonapi_stream_enabled:
+            from services.tonapi_stream import TonApiStream
+
+            stream_task = asyncio.create_task(TonApiStream(self._tonapi_sync, self.settings).run(stop_event))
+
         while not stop_event.is_set():
             try:
                 await self.process_collections()
@@ -271,4 +277,10 @@ class MarketListener:
             except asyncio.TimeoutError:
                 pass
 
+        if stream_task is not None:
+            stream_task.cancel()
+            try:
+                await stream_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         logger.info(f"[market_listener] остановлен, статистика: {self.stats}")

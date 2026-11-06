@@ -110,6 +110,10 @@ class TonApiClient:
         )
         return (page or {}).get("nft_items") or []
 
+    async def fetch_nft(self, address: str) -> dict[str, Any]:
+        """Одно NFT (GET /v2/nfts/{address}): owner, sale, metadata, collection."""
+        return await self._get(f"/v2/nfts/{address}", context=f"nft[{address[:8]}…]") or {}
+
     async def fetch_account_nfts(self, account: str, offset: int, limit: int = PAGE_LIMIT) -> list[dict[str, Any]]:
         """NFT, которыми владеет аккаунт (GET /v2/accounts/{account}/nfts)."""
         page = await self._get(

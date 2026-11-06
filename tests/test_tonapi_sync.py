@@ -290,3 +290,113 @@ async def test_market_listener_uses_tonapi_when_key_set(session: Any) -> None:
 def test_market_listener_without_key_keeps_getgems() -> None:
     listener = MarketListener(session=None, redis=None, settings=Settings(tonapi_key=""))  # type: ignore[arg-type]
     assert listener._tonapi_sync is None
+
+
+# --- ложные продажи, компактное состояние, поток реального времени, приоритет --------------------
+
+def test_market_contract_owner_without_sale_is_uncertain_not_a_sale() -> None:
+    """Регрессия (живые данные, Berry Box): листинг Marketapp, в снимке нет sale и владелец —
+    контракт «Marketapp Deployer». Это не продажа и не новый листинг."""
+    listed = parse_item(raw_item("0:a", 1, "0:seller", price=10.5, seller="0:seller"))
+    flap = raw_item("0:a", 1, "0:deployer")
+    flap["owner"]["is_wallet"] = False
+    cur = parse_item(flap)
+    assert listed is not None and cur is not None and cur.uncertain
+    from services.tonapi_sync import state_to_store
+
+    prev = to_state([listed])
+    d = diff_states(prev, [cur])
+    assert not d.sales and not d.listings and not d.transfers
+    assert state_to_store([cur], prev) == [listed]  # прошлое состояние сохраняется
+    back = parse_item(raw_item("0:a", 1, "0:seller", price=10.5, seller="0:seller"))
+    assert back is not None and not diff_states(prev, [back]).listings  # «возврат» — не новый листинг
+
+
+def test_compact_state_roundtrip_and_old_format() -> None:
+    from services.tonapi_sync import decode_state, encode_state
+
+    it = ItemState("0:a", 7, "0:o", Decimal("5.5"), {"model": "M", "symbol": "S"}, "getgems", "X #7")
+    back, pass_no = decode_state("0:a", encode_state(it, 3))  # type: ignore[misc]
+    assert pass_no == 3 and back.attrs == {"model": "M", "symbol": "S"} and back.price == Decimal("5.5")
+    assert back.name is None and back.index == 7
+    old = orjson.dumps(["0:o", "1", 2, {"model": "M"}, "getgems", "X #2", 1])
+    o, p = decode_state("0:b", old)  # type: ignore[misc]
+    assert o.attrs == {"model": "M"} and p == 1
+
+
+async def _ready_collection(session: Any) -> tuple[Collection, FakeRedis, FakeClient, TonApiSync]:
+    coll, redis, client, sync = await _setup(session)
+    client.items = [raw_item("0:a", 1, "0:o1", price=50, seller="0:o1"), raw_item("0:b", 2, "0:o2", price=80)]
+    await sync.sync_collection(coll.id, "Teddy", ADDR, now=NOW)  # первый проход -> ready
+    return coll, redis, client, sync
+
+
+def _api_nft(item: dict[str, Any]) -> dict[str, Any]:
+    return {**item, "collection": {"address": ADDR, "name": "Teddys"}}
+
+
+async def test_stream_apply_item_sale_and_instant_floor_drop(session: Any) -> None:
+    coll, redis, _client, sync = await _ready_collection(session)
+    sold = raw_item("0:a", 1, "0:buyer")
+    sold["owner"]["is_wallet"] = True
+    d = await sync.apply_item(_api_nft(sold), now=NOW)
+    assert d is not None and [p for _i, p, _pr in d.sales] == [Decimal("50")]
+    assert redis.events(STREAM_NFT_SALES)[0]["nft_name"] == "Teddy #1"
+
+    cheap = await sync.apply_item(_api_nft(raw_item("0:b", 2, "0:o2", price=20)), now=NOW)
+    assert cheap is not None and [i.price for i in cheap.listings] == [Decimal("20")]
+    await session.refresh(coll)
+    assert Decimal(str(coll.floor_price)) == Decimal("20")  # флор снижен сразу, без прохода
+    attr = (await session.execute(select(Attribute).where(Attribute.value == "Obelisk"))).scalar_one()
+    assert Decimal(str(attr.floor_price)) == Decimal("20")
+
+    other = raw_item("0:z", 9, "0:x")
+    assert await sync.apply_item({**other, "collection": {"address": "0:" + "f" * 64}}) is None
+
+
+async def test_stream_ignored_before_first_pass(session: Any) -> None:
+    _coll, _redis, _client, sync = await _setup(session)
+    assert await sync.apply_item(_api_nft(raw_item("0:a", 1, "0:o1", price=5))) is None
+
+
+async def test_stream_handle_data_and_process(session: Any) -> None:
+    from services.tonapi_stream import TonApiStream
+
+    _coll, redis, _client, sync = await _ready_collection(session)
+
+    class Client(FakeClient):
+        async def fetch_nft(self, address: str) -> dict[str, Any]:
+            return _api_nft(raw_item("0:b", 2, "0:o2", price=60))
+
+    sync.client = Client()  # type: ignore[assignment]
+    stream = TonApiStream(sync, Settings(tonapi_key="k", tonapi_stream_delay=0))
+    stream.handle_data('{"account_id":"0:B","lt":1,"tx_hash":"h"}')
+    stream.handle_data('{"account_id":"0:b","lt":2,"tx_hash":"h2"}')  # дубль в очереди
+    stream.handle_data('{"account_id":"0:unknown"}')
+    stream.handle_data("not json")
+    assert stream.queue.qsize() == 2 and stream.stats["events"] == 3
+    assert await stream.process_one(stream.queue.get_nowait()) is True
+    assert await stream.process_one(stream.queue.get_nowait()) is False  # не наш NFT
+    assert [e["price_ton"] for e in redis.events(STREAM_NFT_LISTINGS)] == [60.0]
+
+
+async def test_hot_collections_scanned_every_cycle_cold_every_nth(session: Any) -> None:
+    from db.models import Filter, User
+
+    hot = Collection(name="Hot", contract_address="EQ" + "H" * 46, source="seed")
+    cold = Collection(name="Cold", contract_address="EQ" + "C" * 46, source="seed")
+    session.add_all([hot, cold, User(tg_id=1)])
+    await session.flush()
+    session.add(Filter(user_id=1, collection_id=hot.id, is_active=True))
+    await session.commit()
+    sync = TonApiSync(session, FakeRedis(), Settings(tonapi_key="k", tonapi_cold_every=3,  # type: ignore[arg-type]
+                                                     tonapi_discovery_enabled=False), client=FakeClient())  # type: ignore[arg-type]
+    seen: list[str] = []
+
+    async def fake_sync(coll_id: Any, name: str, address: str, now: Any = None) -> None:
+        seen.append(name)
+
+    sync.sync_collection = fake_sync  # type: ignore[method-assign]
+    for _ in range(4):
+        await sync.process_collections()
+    assert seen == ["Hot", "Cold", "Hot", "Hot", "Hot", "Cold"]

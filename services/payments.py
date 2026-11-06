@@ -41,8 +41,11 @@ CRYPTOBOT_API = "https://pay.crypt.bot/api"
 class CryptoBotClient:
     """Минимальный клиент Crypto Pay API (createInvoice)."""
 
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, api_url: str | None = None) -> None:
+        from core.config import get_settings
+
         self.token = token
+        self.api_url = (api_url or get_settings().cryptobot_api_url or CRYPTOBOT_API).rstrip("/")
 
     async def create_invoice(
         self, amount: float, payload: str, description: str = "", fiat: str | None = None
@@ -61,7 +64,7 @@ class CryptoBotClient:
             else:
                 body["asset"] = "TON"
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as sess:
-                async with sess.post(f"{CRYPTOBOT_API}/createInvoice", json=body, headers=headers) as resp:
+                async with sess.post(f"{self.api_url}/createInvoice", json=body, headers=headers) as resp:
                     data = orjson.loads(await resp.read())
                     if not data.get("ok"):
                         raise RuntimeError(f"CryptoBot error: {data.get('error') or data.get('description')}")

@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import re
 import uuid
@@ -44,7 +45,7 @@ from core.redis_client import (
     recent_sales_key,
     stream_publish,
 )
-from db.models import Attribute, Collection, NftOwnershipHistory, ProcessedNft, Sale
+from db.models import Attribute, Collection, Favorite, Filter, NftOwnershipHistory, ProcessedNft, Sale
 from services.floors import apply_collection_floor
 from services.gift_discovery import GiftCollectionDiscovery
 from services.market.events import ListingEvent, listing_to_stream_payload
@@ -86,6 +87,9 @@ class ItemState:
     attrs: dict[str, str]
     market: str = "tonapi"
     name: str | None = None
+    # Нет листинга, а владелец — контракт (не кошелёк): TonAPI не распознал контракт продажи или
+    # предмет в процессе листинга. Такой снимок не порождает событий, прошлое состояние сохраняется.
+    uncertain: bool = False
 
 
 @dataclass
@@ -121,8 +125,10 @@ def parse_item(raw: dict[str, Any]) -> ItemState | None:
     if not address:
         return None
     sale = raw.get("sale") or None
+    raw_owner = raw.get("owner") or {}
     owner = _owner((sale or {}).get("owner")) if sale else None
-    owner = owner or _owner(raw.get("owner"))
+    owner = owner or _owner(raw_owner)
+    uncertain = not sale and owner is not None and raw_owner.get("is_wallet") is False
     attrs: dict[str, str] = {}
     for a in (raw.get("metadata") or {}).get("attributes") or []:
         trait = TRAIT_MAP.get(str(a.get("trait_type") or a.get("name") or "").lower())
@@ -132,21 +138,30 @@ def parse_item(raw: dict[str, Any]) -> ItemState | None:
     market = normalize_market(((sale or {}).get("market") or {}).get("name")) if sale else "tonapi"
     name = (raw.get("metadata") or {}).get("name") or None
     return ItemState(address, _item_number(raw), owner, parse_ton_price(sale) if sale else None,
-                     attrs, market, name)
+                     attrs, market, name, uncertain)
+
+
+_ATTR_ORDER = ("model", "background", "symbol", "pattern")
 
 
 def encode_state(item: ItemState, pass_no: int) -> bytes:
-    return orjson.dumps([item.owner, str(item.price) if item.price is not None else None,
-                         item.index, item.attrs, item.market, item.name, pass_no])
+    """Компактно (~1,5 млн записей в Redis): имя не храним — оно = «<коллекция> #<номер>»."""
+    return orjson.dumps([item.owner, str(item.price) if item.price is not None else None, item.index,
+                         [item.attrs.get(k) for k in _ATTR_ORDER], item.market, pass_no])
 
 
 def decode_state(address: str, raw: bytes | str | None) -> tuple[ItemState, int] | None:
     if raw is None:
         return None
     try:
-        owner, price, index, attrs, market, name, pass_no = orjson.loads(raw)
+        data = orjson.loads(raw)
+        if len(data) == 7:  # старый формат: [..., attrs: dict, market, name, pass]
+            owner, price, index, attrs, market, _name, pass_no = data
+        else:
+            owner, price, index, values, market, pass_no = data
+            attrs = {k: v for k, v in zip(_ATTR_ORDER, values, strict=False) if v}
         return ItemState(address, int(index), owner, Decimal(price) if price is not None else None,
-                         dict(attrs), market, name), int(pass_no)
+                         dict(attrs), market), int(pass_no)
     except Exception:  # noqa: BLE001 — битая/старая запись = «не видели»
         return None
 
@@ -163,6 +178,10 @@ def diff_states(prev: dict[str, ItemState] | None, cur: list[ItemState]) -> Sync
         return diff
     for c in cur:
         p = prev.get(c.address)
+        if c.uncertain:
+            if p is None:
+                diff.new_items.append(c)
+            continue  # неопределённый снимок: без событий, прошлое состояние остаётся
         if p is None:
             diff.new_items.append(c)
             if c.price is not None:
@@ -178,6 +197,11 @@ def diff_states(prev: dict[str, ItemState] | None, cur: list[ItemState]) -> Sync
     return diff
 
 
+def state_to_store(items: list[ItemState], prev: dict[str, ItemState]) -> list[ItemState]:
+    """Для неопределённых снимков сохраняем прошлое состояние (если было)."""
+    return [prev.get(i.address, i) if i.uncertain else i for i in items]
+
+
 def _s(v: bytes | str | None) -> str | None:
     return v.decode() if isinstance(v, bytes) else v
 
@@ -190,23 +214,45 @@ class TonApiSync:
         self.settings = settings
         self.client = client or TonApiClient(settings)
         self.page_limit = page_limit
-        self.stats = {"listings": 0, "sales": 0, "transfers": 0, "passes": 0, "errors": 0}
+        self.stats = {"listings": 0, "sales": 0, "transfers": 0, "passes": 0, "errors": 0,
+                      "stream_items": 0}
         self.discovery = GiftCollectionDiscovery(session, redis, settings, self.client)
+        # Одна AsyncSession на скан и поток (services/tonapi_stream.py): работа с БД/состоянием — под замком
+        self.lock = asyncio.Lock()
+        self._cycle = 0
+
+    async def _hot_collections(self) -> set[uuid.UUID]:
+        """Коллекции, на которые у пользователей есть активные фильтры или избранное."""
+        rows = await self.session.execute(
+            select(Filter.collection_id).where(Filter.is_active.is_(True), Filter.collection_id.is_not(None))
+            .union(select(Favorite.collection_id).where(Favorite.collection_id.is_not(None)))
+        )
+        return {r[0] for r in rows.all()}
 
     async def process_collections(self) -> None:
         self.discovery.client = self.client  # один клиент (и rate limiter) на sync и discovery
-        await self.discovery.maybe_run()  # новые коллекции Telegram Gifts -> БД (раз в interval)
-        rows = (await self.session.execute(
-            select(Collection.id, Collection.name, Collection.contract_address)
-            .where(~Collection.contract_address.startswith("tg_gift:"))
-        )).all()
+        async with self.lock:
+            await self.discovery.maybe_run()  # новые коллекции Telegram Gifts -> БД (раз в interval)
+            rows = (await self.session.execute(
+                select(Collection.id, Collection.name, Collection.contract_address)
+                .where(~Collection.contract_address.startswith("tg_gift:"))
+            )).all()
+            hot = await self._hot_collections()
+        # Приоритет: «горячие» коллекции — каждый цикл и первыми; остальные — раз в
+        # tonapi_cold_every циклов (события по ним всё равно приходят из потока в реальном времени).
+        self._cycle += 1
+        every = max(1, self.settings.tonapi_cold_every)
+        rows = sorted(rows, key=lambda r: r[0] not in hot)
         for coll_id, name, address in rows:
+            if coll_id not in hot and (self._cycle - 1) % every != 0:
+                continue
             try:
                 await self.sync_collection(coll_id, name, address)
             except Exception as exc:  # noqa: BLE001 — одна коллекция не роняет цикл
                 self.stats["errors"] += 1
                 logger.warning(f"[tonapi_sync] {name}: {exc!r}")
-                await self.session.rollback()
+                async with self.lock:
+                    await self.session.rollback()
 
     async def _fetch_chunk(self, address: str, cursor: int) -> tuple[list[dict[str, Any]], int, bool]:
         """До tonapi_pages_per_cycle страниц с cursor. -> (items, следующий offset, проход завершён)."""
@@ -230,9 +276,16 @@ class TonApiSync:
         pass_no = int(_s(await self.redis.get(keys["pass"])) or 0)
         ready = await self.redis.get(keys["ready"]) is not None
 
-        raw_items, next_offset, complete = await self._fetch_chunk(address, cursor)
+        raw_items, next_offset, complete = await self._fetch_chunk(address, cursor)  # сеть — вне замка
         items = list(to_state([i for i in (parse_item(r) for r in raw_items) if i is not None]).values())
+        async with self.lock:
+            return await self._apply_chunk(coll_id, name, address, keys, items, pass_no, ready,
+                                           next_offset, complete, now)
 
+    async def _apply_chunk(self, coll_id: uuid.UUID, name: str, address: str, keys: dict[str, str],
+                           items: list[ItemState], pass_no: int, ready: bool, next_offset: int,
+                           complete: bool, now: dt.datetime) -> SyncDiff:
+        cid = str(coll_id)
         prev: dict[str, ItemState] = {}
         if items:
             values = await self.redis.hmget(keys["items"], [i.address for i in items])
@@ -241,6 +294,7 @@ class TonApiSync:
                 if decoded is not None:
                     prev[item.address] = decoded[0]
         diff = diff_states(prev if ready else None, items)
+        stored = state_to_store(items, prev)
 
         await self._persist_chunk(coll_id, diff, now)
         full: dict[str, ItemState] | None = None
@@ -254,13 +308,13 @@ class TonApiSync:
                     full[a] = decoded[0]
                 else:
                     stale.append(a)
-            full.update(to_state(items))
+            full.update(to_state(stored))
             stale = [a for a in stale if a not in full]
             await self._persist_aggregates(coll_id, list(full.values()), now)
         await self.session.commit()  # сначала БД, потом состояние в Redis — иначе при сбое события потеряются
 
-        if items:
-            await self.redis.hset(keys["items"], mapping={i.address: encode_state(i, pass_no) for i in items})
+        if stored:
+            await self.redis.hset(keys["items"], mapping={i.address: encode_state(i, pass_no) for i in stored})
         if stale:
             await self.redis.hdel(keys["items"], *stale)
         await self.redis.expire(keys["items"], STATE_TTL)
@@ -279,6 +333,71 @@ class TonApiSync:
             logger.info(f"[tonapi_sync] {name}: первый проход завершён, items={len(full or {})}")
         return diff
 
+    async def apply_item(self, raw: dict[str, Any], now: dt.datetime | None = None) -> SyncDiff | None:
+        """Событие из потока (services/tonapi_stream.py): одно NFT по GET /v2/nfts/{addr}.
+
+        Только для коллекций, прошедших первый проход (иначе нечего сравнивать). Флор коллекции
+        и модели снижается сразу, если новый листинг дешевле; рост флора — по завершении прохода.
+        """
+        now = now or dt.datetime.now(dt.timezone.utc)
+        item = parse_item(raw)
+        coll_addr = ((raw.get("collection") or {}).get("address")) or ""
+        if item is None or not coll_addr:
+            return None
+        async with self.lock:
+            coll = await self._collection_by_raw(coll_addr)
+            if coll is None:
+                return None
+            cid = str(coll.id)
+            keys = {k: tpl.format(cid=cid) for k, tpl in
+                    (("items", ITEMS_KEY), ("pass", PASS_KEY), ("ready", READY_KEY))}
+            if await self.redis.get(keys["ready"]) is None:
+                return None
+            pass_no = int(_s(await self.redis.get(keys["pass"])) or 0)
+            decoded = decode_state(item.address, (await self.redis.hmget(keys["items"], [item.address]))[0])
+            prev = {item.address: decoded[0]} if decoded is not None else {}
+            diff = diff_states(prev, [item])
+            stored = state_to_store([item], prev)
+            await self._persist_chunk(coll.id, diff, now)
+            if item.price is not None and not item.uncertain:
+                await self._lower_floors(coll, item, now)
+            await self.session.commit()
+            await self.redis.hset(keys["items"], mapping={i.address: encode_state(i, pass_no) for i in stored})
+            await self._publish(cid, coll.name, coll.contract_address, diff, now)
+            self.stats["stream_items"] += 1
+            return diff
+
+    async def _collection_by_raw(self, raw_addr: str) -> Collection | None:
+        from services.gift_discovery import raw_address
+
+        target = raw_address(raw_addr)
+        if not getattr(self, "_coll_cache", None) or target not in self._coll_cache:
+            rows = (await self.session.execute(select(Collection))).scalars().all()
+            self._coll_cache = {raw_address(c.contract_address): c.id for c in rows
+                                if not c.contract_address.startswith("tg_gift:")}
+        cid = self._coll_cache.get(target)
+        return await self.session.get(Collection, cid) if cid is not None else None
+
+    async def _lower_floors(self, coll: Collection, item: ItemState, now: dt.datetime) -> None:
+        ttl = self.settings.floor_cache_ttl
+        price = item.price
+        assert price is not None
+        if coll.floor_price is None or price < Decimal(str(coll.floor_price)):
+            await apply_collection_floor(self.session, coll.id, price, now)
+            await cache_set_json(self.redis, floor_key(str(coll.id)), float(price), ttl=ttl)
+        model = item.attrs.get("model")
+        if model:
+            attr = (await self.session.execute(select(Attribute).where(
+                Attribute.collection_id == coll.id, Attribute.type == "model", Attribute.value == model
+            ))).scalar_one_or_none()
+            if attr is not None and (not attr.floor_price or price < Decimal(str(attr.floor_price))):
+                attr.floor_price = price
+                await cache_set_json(self.redis, floor_key(str(coll.id), model), float(price), ttl=ttl)
+
+    async def is_tracked_item(self, nft_address: str) -> bool:
+        async with self.lock:
+            return (await self.session.get(ProcessedNft, nft_address)) is not None
+
     async def _publish(self, cid: str, name: str, address: str, diff: SyncDiff, now: dt.datetime) -> None:
         for item in diff.listings:
             event = ListingEvent(
@@ -288,7 +407,7 @@ class TonApiSync:
             )
             payload = listing_to_stream_payload(event)
             payload["collection_id"] = cid
-            payload["nft_name"] = item.name
+            payload["nft_name"] = item.name or f"{name} #{item.index}"
             await stream_publish(self.redis, STREAM_NFT_LISTINGS, payload)
         ton_usd = await self._ton_usd() if diff.sales else None
         for item, price, prev in diff.sales:
@@ -296,7 +415,7 @@ class TonApiSync:
             sale = {
                 "type": "sale", "collection_id": cid, "collection_name": name,
                 "collection_address": address, "nft_address": item.address, "nft_index": item.index,
-                "nft_name": item.name, "price_ton": float(price),
+                "nft_name": item.name or f"{name} #{item.index}", "price_ton": float(price),
                 "price_usd": round(float(price) * ton_usd, 2) if ton_usd else None,
                 "marketplace": prev.market, "seller_ton": prev.owner or "", "buyer_ton": item.owner or "",
                 "attributes": attrs, "sold_at": now.isoformat(),

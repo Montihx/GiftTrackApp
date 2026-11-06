@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     # --- CryptoBot ---
     cryptobot_token: str = Field(default="")
     cryptobot_webhook_secret: str = Field(default="")
+    # Crypto Pay API: боевой https://pay.crypt.bot/api, тестовая сеть https://testnet-pay.crypt.bot/api
+    cryptobot_api_url: str = Field(default="https://pay.crypt.bot/api")
 
     # --- Внешние API ---
     getgems_ws_url: str = Field(default="wss://api.getgems.io/graphql")
@@ -67,6 +69,14 @@ class Settings(BaseSettings):
     # Автообнаружение новых коллекций Telegram Gifts (listener-market, только с TONAPI_KEY):
     # раз в interval читаем pages страниц NFT кошелька Fragment Gift Minter, новые коллекции
     # проверяем (деплоер = минтер, метаданные nft.fragment.com) и добавляем в БД.
+    # Реальное время: SSE-поток всех переводов NFT в TON (GET /v2/sse/accounts/transactions,
+    # op 0x5fcc3d14). Перевод нашего подарка -> GET /v2/nfts/{addr} через tonapi_stream_delay с
+    # -> «ЛИСТИНГ» / «GIFT SOLD!» за секунды, без полного скана. Квоту почти не тратит.
+    tonapi_stream_enabled: bool = Field(default=True)
+    tonapi_stream_delay: float = Field(default=2.0, ge=0)
+    # Полный скан (floors/атрибуты/страховка): коллекции без фильтров и избранного пользователей
+    # сканируются раз в cold_every циклов, «горячие» — каждый цикл.
+    tonapi_cold_every: int = Field(default=3, ge=1)
     tonapi_discovery_enabled: bool = Field(default=True)
     tonapi_discovery_interval: float = Field(default=3600.0)
     tonapi_discovery_pages: int = Field(default=5, ge=1)

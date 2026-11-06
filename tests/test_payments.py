@@ -242,3 +242,11 @@ async def test_create_invoice_fiat_body_and_bot_invoice_url(monkeypatch):
     assert sent["url"].endswith("/createInvoice") and sent["headers"] == {"Crypto-Pay-API-Token": "tok"}
     assert sent["json"] == {"amount": "49.0", "payload": "1:30", "description": "Premium",
                             "currency_type": "fiat", "fiat": "USD", "accepted_assets": "TON,USDT"}
+
+
+def test_cryptobot_testnet_url():
+    from core.config import Settings
+    from services.payments import CryptoBotClient
+
+    assert Settings().cryptobot_api_url == "https://pay.crypt.bot/api"
+    assert CryptoBotClient("t", "https://testnet-pay.crypt.bot/api/").api_url == "https://testnet-pay.crypt.bot/api"
