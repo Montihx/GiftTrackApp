@@ -226,6 +226,9 @@ class NotificationDispatcher:
         # даёт — тогда Telegram по slug подарка
         name = metadata.get("name") or f"NFT #{payload.get('index', '?')}"
         slug = payload.get("slug") or gift_slug(name)
+        if not await self._has_candidates(collection_id, metadata, "upgrade", number=gift_number(name, slug)):
+            self.stats["upgrades"] += 1
+            return
         owner, info = await self._find_owner(owner_ton or "", slug)
         owner_link = self._owner_link(owner, owner_ton or "")
         tme = f"https://t.me/nft/{slug}" if slug else None
@@ -280,6 +283,13 @@ class NotificationDispatcher:
             slug = str(payload["link"]).rsplit("/", 1)[-1]
         known = ({"tg_user_id": payload.get("seller_tg_id"), "username": payload.get("seller_username"),
                   "name": payload.get("seller_name")} if marketplace == "telegram" else None)
+        title_for_number = payload.get("nft_name") or f"#{payload.get('nft_index', '?')}"
+        if not await self._has_candidates(
+            collection_id, attributes, "listing", number=gift_number(title_for_number, slug),
+            price=float(price) if price else None,
+        ):
+            self.stats["listings"] += 1
+            return  # никому не нужен — не ждём воркер Telegram и не собираем текст
         owner, info = await self._find_owner(seller_ton, slug, known)
         owner_link = self._owner_link(owner, seller_ton)
         tme = f"https://t.me/nft/{slug}" if slug else None
@@ -402,22 +412,19 @@ class NotificationDispatcher:
                 owner = {**owner, **{k: v for k, v in info.items() if k != "value"}}
         return owner, info
 
-    async def _send_to_subscribers(
+    async def _match_users(
         self,
         collection_id: str | None,
         attributes: dict[str, Any],
-        text: str,
-        keyboard: InlineKeyboardMarkup | None,
         has_contact: bool = True,
-        preview_url: str | None = None,
         kind: str = "sale",
         number: int | None = None,
         price: float | None = None,
-    ) -> None:
-        """Находит подписчиков с подходящими фильтрами и шлёт им сообщение параллельно.
+    ) -> tuple[set[int], int]:
+        """(пользователи с подходящими фильтрами, сколько фильтров отсеяно из-за отсутствия контакта).
 
-        Фильтр совпадает, если совпали все заданные в нём поля: модель, фон, символ, узор
-        и диапазон «Флор модели от/до» (floor модели: Redis floor:{cid}:{model}, иначе БД).
+        Фильтр совпадает, если совпали все заданные в нём поля: модель, фон, символ, узор, диапазоны
+        «Флор модели», «Номер» и «Цена» (floor модели: Redis floor:{cid}:{model}, иначе БД).
         """
         stmt = select(Filter).where(Filter.is_active.is_(True))
         if collection_id:
@@ -427,7 +434,7 @@ class NotificationDispatcher:
 
         if not filters:
             logger.debug("Нет активных подписчиков на это событие")
-            return
+            return set(), 0
 
         attr_ids = {
             fid for f in filters
@@ -469,7 +476,42 @@ class NotificationDispatcher:
                     ok = False
             if ok:
                 target_users.add(f.user_id)
+        return target_users, no_contact
 
+    async def _has_candidates(
+        self,
+        collection_id: str | None,
+        attributes: dict[str, Any],
+        kind: str,
+        number: int | None = None,
+        price: float | None = None,
+    ) -> bool:
+        """Есть ли хоть один фильтр, которому событие подходит (контакт владельца не учитываем).
+
+        Дешёвая проверка ПЕРЕД поиском владельца: запрос к воркеру Telegram ждёт до owner_lookup_timeout секунд,
+        а событий в потоке сотни в минуту — без неё диспетчер (он один и обрабатывает события по очереди)
+        застревал на тех, кому они никому не нужны, и алерты приходили с большим опозданием.
+        """
+        users, _ = await self._match_users(collection_id, attributes, has_contact=True, kind=kind,
+                                           number=number, price=price)
+        return bool(users)
+
+    async def _send_to_subscribers(
+        self,
+        collection_id: str | None,
+        attributes: dict[str, Any],
+        text: str,
+        keyboard: InlineKeyboardMarkup | None,
+        has_contact: bool = True,
+        preview_url: str | None = None,
+        kind: str = "sale",
+        number: int | None = None,
+        price: float | None = None,
+    ) -> None:
+        """Находит подписчиков с подходящими фильтрами и шлёт им сообщение параллельно."""
+        target_users, no_contact = await self._match_users(
+            collection_id, attributes, has_contact=has_contact, kind=kind, number=number, price=price
+        )
         if not target_users:
             if no_contact:
                 # видно в логах, почему алерта нет: у события нет контакта владельца, а фильтр его требует
