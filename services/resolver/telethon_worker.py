@@ -164,7 +164,14 @@ class BioScanner:
                 except Exception as exc:  # noqa: BLE001
                     logger.exception(f"scan_cycle: {exc!r}")
                 next_scan = loop.time() + self.settings.bio_cycle_seconds
-            item = await self.redis.brpop(QUEUE_KEY, timeout=5)
+            try:
+                item = await self.redis.brpop(QUEUE_KEY, timeout=5)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — таймаут/обрыв Redis не должен ронять сервис
+                logger.warning(f"redis brpop: {exc!r} — повтор через 2s")
+                await asyncio.sleep(2)
+                continue
             if item is None:
                 continue
             addr = item[1].decode() if isinstance(item[1], bytes) else item[1]

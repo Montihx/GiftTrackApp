@@ -96,3 +96,52 @@ async def test_candidates_skip_recently_scanned(session):
     redis.kv["bio_scanned:a"] = b"1"
     scanner = BioScanner(None, redis, None)
     assert await scanner.candidates(session) == ["b"]
+
+
+async def test_run_survives_redis_errors(monkeypatch):
+    """Сбой Redis (таймаут) в brpop не роняет сканер — повтор после паузы."""
+    import asyncio
+
+    from services.resolver import telethon_worker as tw
+
+    stop = asyncio.Event()
+    calls = {"n": 0}
+
+    class FlakyRedis(FakeRedis):
+        async def brpop(self, key, timeout=0):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise TimeoutError("Timeout reading from socket")
+            stop.set()
+            return None
+
+    async def no_sleep(_s):
+        return None
+
+    scanner = tw.BioScanner(None, FlakyRedis(), None)
+
+    async def no_scan():
+        return 0
+
+    scanner.scan_cycle = no_scan
+    monkeypatch.setattr(tw.asyncio, "sleep", no_sleep)
+    await asyncio.wait_for(scanner.run(stop), timeout=5)
+    assert calls["n"] == 2
+
+
+async def test_supervise_restarts_failed_job():
+    import asyncio
+
+    from bot.resolver_main import _supervise
+
+    stop = asyncio.Event()
+    runs = {"n": 0}
+
+    async def job():
+        runs["n"] += 1
+        if runs["n"] == 1:
+            raise TimeoutError("network")
+        stop.set()
+
+    await asyncio.wait_for(_supervise("job", job, stop, backoff=0.01), timeout=5)
+    assert runs["n"] == 2

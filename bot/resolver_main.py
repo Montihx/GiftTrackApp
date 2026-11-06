@@ -48,15 +48,33 @@ async def _telethon_worker(redis, stop_event: asyncio.Event) -> None:
 
     logger.info("Telethon worker запущен")
     scanner = BioScanner(client, redis, session_scope, settings)
-    jobs = [scanner.run(stop_event)]
+    jobs = [_supervise("bio_scanner", lambda: scanner.run(stop_event), stop_event)]
     if settings.tg_market_enabled:
         from services.telegram_market import TelegramMarketWatcher
 
-        jobs.append(TelegramMarketWatcher(client, redis, session_scope, settings).run(stop_event))
+        watcher = TelegramMarketWatcher(client, redis, session_scope, settings)
+        jobs.append(_supervise("tg_market", lambda: watcher.run(stop_event), stop_event))
     try:
         await asyncio.gather(*jobs)
     finally:
         await client.disconnect()
+
+
+async def _supervise(name: str, factory, stop_event: asyncio.Event, backoff: float = 2.0) -> None:  # noqa: ANN001
+    """Перезапуск упавшей задачи с паузой: сбой одной (сеть, Redis) не роняет весь resolver."""
+    while not stop_event.is_set():
+        try:
+            await factory()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"[{name}] упал: {exc!r} — перезапуск через {backoff:.0f}s", exc_info=exc)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=backoff)
+            except asyncio.TimeoutError:
+                pass
+            backoff = min(backoff * 2, 60.0)
 
 
 def _make_client(settings):

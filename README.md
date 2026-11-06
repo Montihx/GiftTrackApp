@@ -211,7 +211,7 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 |---|---|---|
 | `TONAPI_KEY` | пусто | ключ tonconsole.com; пусто → seed-каталог + GetGems |
 | `TONAPI_POLL_INTERVAL` | 15 | пауза между циклами TonAPI-синхронизации, с |
-| `TONAPI_RPS` | 1 | лимит запросов к TonAPI на процесс |
+| `TONAPI_RPS` | 0.8 | лимит запросов к TonAPI на процесс (free-тариф — 1 RPS; ровно 1.0 даёт частые 429) |
 | `TONAPI_PAGES_PER_CYCLE` | 3 | страниц по 1000 items на коллекцию за цикл |
 | `TONAPI_STREAM_ENABLED` | true | события в реальном времени из SSE-потока переводов NFT |
 | `TONAPI_STREAM_DELAY` | 2 | пауза перед запросом NFT после события (индексатор TonAPI), с |
