@@ -73,7 +73,7 @@ from services.resolver.resolver import OwnerResolver
 
 MARKET_TITLES = {
     "getgems": "GetGems", "marketapp": "Marketapp", "fragment": "Fragment", "portals": "Portals",
-    "tonnel": "Tonnel", "mrkt": "MRKT", "xgift": "XGift", "tonapi": "TON",
+    "tonnel": "Tonnel", "mrkt": "MRKT", "xgift": "XGift", "tonapi": "TON", "telegram": "Telegram Market",
 }
 
 
@@ -211,8 +211,11 @@ class NotificationDispatcher:
             except (ValueError, AttributeError):
                 pass
 
-        # Резолвим продавца
-        owner = await self.resolver.resolve(seller_ton) if seller_ton else {}
+        # Продавец: маркет Telegram сразу даёт аккаунт владельца, иначе — резолвим TON-адрес
+        if payload.get("seller_tg_id"):
+            owner = {"tg_user_id": payload["seller_tg_id"], "username": payload.get("seller_username")}
+        else:
+            owner = await self.resolver.resolve(seller_ton) if seller_ton else {}
         owner_link = self._owner_link(owner, seller_ton)
 
         # Собираем аналитику из Redis
@@ -233,11 +236,13 @@ class NotificationDispatcher:
         # Формируем сообщение
         lines = ["✅ <b>ЛИСТИНГ</b>"]
         title = payload.get("nft_name") or f"#{payload.get('nft_index', '?')}"
-        lines.append(
-            f"🎭 <a href='https://getgems.io/nft/{nft_address}'>"
-            f"{title}</a> на {market_title(marketplace)}"
-        )
-        lines.append(f"💰 <b>{price} TON</b>")
+        link = payload.get("link") or f"https://getgems.io/nft/{nft_address}"
+        lines.append(f"🎭 <a href='{link}'>{title}</a> на {market_title(marketplace)}")
+        stars = payload.get("price_stars")
+        if price:
+            lines.append(f"💰 <b>{_fmt_num(float(price))} TON</b>" + (f" · ⭐ {stars:,}".replace(",", " ") if stars else ""))
+        elif stars:
+            lines.append(f"💰 <b>⭐ {stars:,}</b>".replace(",", " "))
         if attributes.get("model"):
             lines.append(f"Модель: {attributes['model']}")
         if attributes.get("background"):

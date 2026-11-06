@@ -3,7 +3,8 @@
 Точка входа для сервиса resolver:
     python -m bot.resolver_main
 
-Запускает фоновый джоб обогащения кэша через Telethon (скан bio пользователей).
+Запускает фоновые джобы на Telethon-аккаунте: скан bio пользователей (резолвер владельцев)
+и наблюдение за маркетом подарков Telegram (services/telegram_market.py, TG_MARKET_ENABLED).
 Запускается только если API_ID / API_HASH / PHONE заданы в .env.
 """
 from __future__ import annotations
@@ -47,8 +48,13 @@ async def _telethon_worker(redis, stop_event: asyncio.Event) -> None:
 
     logger.info("Telethon worker запущен")
     scanner = BioScanner(client, redis, session_scope, settings)
+    jobs = [scanner.run(stop_event)]
+    if settings.tg_market_enabled:
+        from services.telegram_market import TelegramMarketWatcher
+
+        jobs.append(TelegramMarketWatcher(client, redis, session_scope, settings).run(stop_event))
     try:
-        await scanner.run(stop_event)
+        await asyncio.gather(*jobs)
     finally:
         await client.disconnect()
 

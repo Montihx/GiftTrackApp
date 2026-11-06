@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     api_hash: str = Field(default="")
     phone: str = Field(default="")
     telethon_session: str = Field(default="sessions/resolver_session")
+    # Маркет подарков Telegram (официальный MTProto, тот же Telethon-аккаунт; сервис resolver)
+    tg_market_enabled: bool = Field(default=True)
+    tg_market_interval: float = Field(default=2.0, ge=0.5)  # пауза между запросами листингов, с
+    tg_market_catalog_interval: int = Field(default=300, ge=30)  # каталог/флоры маркета, с
+    tg_market_page: int = Field(default=30, ge=1, le=100)  # листингов за запрос (новые сверху)
+    tg_market_cold_per_round: int = Field(default=3, ge=0)  # «холодных» коллекций за круг
     # Анти-FloodWait: пауза между запросами, лимит за цикл, повторный скан не чаще N дней
     bio_scan_delay: float = Field(default=2.0)
     bio_scan_batch: int = Field(default=100)

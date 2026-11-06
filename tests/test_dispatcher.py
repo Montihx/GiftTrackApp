@@ -134,7 +134,7 @@ async def test_process_listing_includes_analytics(session):
     assert bot_mock.send_message.called
     text = bot_mock.send_message.call_args[0][1]
     assert "ЛИСТИНГ" in text
-    assert "2400.0 TON" in text
+    assert "2 400 TON" in text
     assert "@seller" in text
 
 

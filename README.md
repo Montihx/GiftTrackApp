@@ -31,11 +31,11 @@ core/       config, logging, redis, retry, graceful shutdown, ton_address
 db/         модели SQLAlchemy 2.0, Alembic-миграции (0001–0004), seed/gift_collections.json
 bot/        точки входа сервисов (bot/*_main.py), handlers, admin-команды
 services/   tonapi + tonapi_sync + tonapi_stream + gift_discovery (TonAPI), market/ (GetGems), ton/ (Tonviewer), updater, floors,
-            seed, showcase, dispatcher, resolver/, payments, collection_discovery
+            seed, showcase, dispatcher, resolver/, telegram_market, payments, collection_discovery
 api/        FastAPI: витрина (/api/collections, /api/items, /api/favorites, /api/subscription),
             фильтры (/api/filters), SSE, вебхук /api/payments/webhook/<secret>
 frontend/   React TWA (Vite, JSX, без роутера/UI-библиотек), Dockerfile + nginx.conf
-tests/      pytest (125 тестов, SQLite in-memory)
+tests/      pytest (130 тестов, SQLite in-memory)
 ```
 
 ## Быстрый старт
@@ -176,10 +176,21 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 **Без ключа** витрина показывает seed-каталог, floor «—», график — empty-state; `listener-market`
 работает через GetGems GraphQL, `updater` считает floors через GetGems.
 
+**Маркет подарков Telegram (официальный API, бесплатно; нужен Telethon-аккаунт резолвера).**
+`services/telegram_market.py` в сервисе `resolver`: раз в `TG_MARKET_CATALOG_INTERVAL` (5 мин)
+`payments.getStarGifts` — соответствие подарков Telegram нашим коллекциям и флор маркета в Stars с числом
+листингов (Redis `tg_market:floor:{cid}`) по всем коллекциям одним запросом; каждые `TG_MARKET_INTERVAL`
+(2 с) — `payments.getResaleStarGifts` по одной коллекции (новые сверху; сначала коллекции с фильтрами/
+избранным). Новый листинг или смена цены → «ЛИСТИНГ» с маркетом «Telegram Market», ценой в TON и/или ⭐ и
+ссылкой `t.me/nft/<slug>`; владелец берётся из Telegram — «Написать владельцу» работает без резолвера.
+Первый опрос коллекции — без уведомлений. FloodWait соблюдается. Вход аккаунта — см. «Telethon» выше;
+лучше отдельный аккаунт.
+
 **Другие маркетплейсы.** Листинги on-chain маркетов (GetGems, Marketapp и др.) TonAPI отдаёт сам,
-имя маркета берётся из `sale.market.name`. Portals, Tonnel и MRKT торгуют подарками внутри Telegram
-(off-chain) и публичного API не имеют — их внутренние API требуют авторизации Telegram-аккаунтом,
-поэтому они не подключены.
+имя маркета берётся из `sale.market.name`. Portals, Tonnel и MRKT публичного API не имеют: их
+внутренние API закрыты защитой от ботов (Tonnel — Cloudflare, MRKT — лимит «contact the support») и
+требуют входа аккаунтом в их мини-приложения. Обходить защиту чужих сервисов мы не будем, поэтому они не
+подключены; офчейн-рынок покрывает официальный маркет Telegram.
 
 ## Переменные окружения (дополнительно к `.env.example`)
 
@@ -197,6 +208,9 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 | `TONAPI_DISCOVERY_INTERVAL` | 3600 | период автообнаружения, с |
 | `TONAPI_DISCOVERY_PAGES` | 5 | страниц NFT минтера за один запуск автообнаружения |
 | `TONVIEWER_ENABLED` | false | включить `listener-ton` (Tonviewer API сейчас недоступен) |
+| `TG_MARKET_ENABLED` | true | листинги маркета подарков Telegram (сервис `resolver`, нужен вход Telethon) |
+| `TG_MARKET_INTERVAL` | 2 | пауза между запросами листингов к Telegram, с |
+| `TG_MARKET_CATALOG_INTERVAL` | 300 | обновление каталога и флоров маркета Telegram, с |
 | `CRYPTOBOT_API_URL` | `https://pay.crypt.bot/api` | для тестов — `https://testnet-pay.crypt.bot/api` (токен из @CryptoTestnetBot) |
 | `SUB_PRICE_USD_30/60/90` | 49 / 89 / 119 | цены тарифов, $ (инвойс CryptoBot в USD, оплата TON/USDT) |
 | `VITE_OWNER_USERNAME` | пусто | username владельца для «Не получается оплатить? → Написать владельцу» (build-arg фронтенда) |
@@ -210,7 +224,7 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 125 тестов
+pytest                          # 130 тестов
 python -m compileall -q core db services bot tests        # то же, что в CI
 cd frontend && npm install && npm run dev   # /api проксируется на localhost:8000
 ```
@@ -238,5 +252,6 @@ cd frontend && npm install && npm run dev   # /api проксируется на
   распознаются полностью. Снимок «нет листинга, владелец — контракт» не порождает событий (защита от
   ложных «GIFT SOLD!»).
 - Portals, Tonnel, MRKT не подключены (нет публичного API, см. «Источники данных»).
+- Продажи на маркете Telegram не отслеживаются (листинг исчезает и при продаже, и при снятии — различить нельзя).
 - `listener-ton` выключен по умолчанию: API Tonviewer недоступен.
 - Отличия от ТЗ: фронтенд на JavaScript (JSX), а не TypeScript.
