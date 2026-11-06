@@ -209,3 +209,28 @@ async def test_event_without_matching_filter_skips_owner_lookup(session: Any) ->
     redis.lpush.assert_not_awaited()  # и воркер Telegram не просим
     bot.send_message.assert_not_awaited()
     assert d.stats["listings"] == 1 and d.stats["upgrades"] == 1
+
+
+def test_nft_url_prefers_telegram_gift_page_and_friendly_address() -> None:
+    from services.dispatcher import format_sale_message, nft_url
+
+    assert nft_url("0:" + "ab" * 32, "Holiday Drink #5901") == "https://t.me/nft/HolidayDrink-5901"
+    raw = "0:" + "ab" * 32
+    url = nft_url(raw)  # без номера в названии — GetGems по user-friendly адресу, а не по raw
+    assert url.startswith("https://getgems.io/nft/EQ") and "0:" not in url
+    text = format_sale_message({"nft_address": raw, "nft_name": "Holiday Drink #5901", "price_ton": 4.95,
+                                "marketplace": "getgems", "attributes": {}})
+    assert "https://t.me/nft/HolidayDrink-5901" in text and "getgems.io/nft/0:" not in text
+
+
+async def test_request_owner_does_not_wait_when_queue_is_long() -> None:
+    from services.owner_lookup import ALIVE_KEY, QUEUE_KEY, request_owner
+
+    redis = AsyncMock()
+    redis.get = AsyncMock(side_effect=lambda k: b"1" if k == ALIVE_KEY else None)
+    redis.llen = AsyncMock(return_value=50)
+    assert await request_owner(redis, "PlushPepe-1", timeout=5, max_queue=20) is None  # без ожидания и без постановки в очередь
+    redis.lpush.assert_not_awaited()
+    redis.llen = AsyncMock(return_value=3)
+    await request_owner(redis, "PlushPepe-2", timeout=0.05, poll=0.01, max_queue=20)
+    redis.lpush.assert_awaited_with(QUEUE_KEY, "PlushPepe-2")  # короткая очередь — запрос ставится

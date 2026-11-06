@@ -110,6 +110,24 @@ def _valuation_lines(info: dict[str, Any]) -> list[str]:
     return lines
 
 
+def nft_url(addr: str | None, name: str | None = None) -> str:
+    """Ссылка на подарок: страница Telegram (t.me/nft/Slug-N) — открывается всегда; иначе GetGems по user-friendly адресу.
+
+    Адрес из TonAPI приходит в raw-виде (0:abc…), а GetGems по нему показывает «Здесь ничего нет».
+    """
+    slug = gift_slug(name)
+    if slug:
+        return f"https://t.me/nft/{slug}"
+    addr = addr or ""
+    try:
+        from core.ton_address import normalize_ton_address
+
+        addr = normalize_ton_address(addr) or addr
+    except Exception:  # noqa: BLE001
+        pass
+    return f"https://getgems.io/nft/{addr}"
+
+
 def gift_number(name: str | None, slug: str | None = None) -> int | None:
     """Номер подарка: «Plush Pepe #727» или slug «PlushPepe-727»."""
     import re
@@ -156,7 +174,7 @@ def format_sale_message(payload: dict[str, Any]) -> str:
     attrs = payload.get("attributes") or {}
     name = payload.get("nft_name") or f"{payload.get('collection_name') or 'Gift'} #{payload.get('nft_index', '?')}"
     addr = payload.get("nft_address", "")
-    lines = ["💸 <b>GIFT SOLD!</b>", f"🎁 <a href='https://getgems.io/nft/{addr}'><b>{name}</b></a>"]
+    lines = ["💸 <b>GIFT SOLD!</b>", f"🎁 <a href='{nft_url(addr, name)}'><b>{name}</b></a>"]
     for key, label in (("model", "Model"), ("background", "Backdrop"), ("symbol", "Symbol")):
         if attrs.get(key):
             lines.append(f"{label}: {attrs[key]}")
@@ -255,7 +273,7 @@ class NotificationDispatcher:
         lines.extend(_valuation_lines(info))
         lines.append("")
         lines.append(f"👤 Владелец: {owner_link}")
-        lines.append(f"🔗 <a href='https://getgems.io/nft/{nft_address}'>GetGems</a>")
+        lines.append(f"🔗 <a href='{nft_url(nft_address)}'>GetGems</a>")
 
         text = "\n".join(lines)
         keyboard = self._owner_keyboard(owner, gift_link=tme)
@@ -319,7 +337,7 @@ class NotificationDispatcher:
         # Формируем сообщение
         lines = ["✅ <b>ЛИСТИНГ</b>"]
         title = payload.get("nft_name") or f"#{payload.get('nft_index', '?')}"
-        link = payload.get("link") or f"https://getgems.io/nft/{nft_address}"
+        link = payload.get("link") or nft_url(nft_address, payload.get("nft_name"))
         lines.append(f"🎭 <a href='{link}'>{title}</a> на {market_title(marketplace)}")
         stars = payload.get("price_stars")
         if price:
@@ -414,7 +432,10 @@ class NotificationDispatcher:
                 logger.debug(f"resolver: {exc!r}")
         info: dict[str, Any] = {}
         if slug and self.settings.owner_lookup_enabled:
-            info = await request_owner(self.redis, slug, timeout=self.settings.owner_lookup_timeout) or {}
+            info = await request_owner(
+                self.redis, slug, timeout=self.settings.owner_lookup_timeout,
+                max_queue=self.settings.owner_lookup_max_queue,
+            ) or {}
             if info and not _has_contact(owner):
                 owner = {**owner, **{k: v for k, v in info.items() if k != "value"}}
         return owner, info

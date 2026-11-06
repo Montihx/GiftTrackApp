@@ -44,14 +44,27 @@ def _loads(raw: Any) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-async def request_owner(redis: Any, slug: str, timeout: float = 4.0, poll: float = 0.4) -> dict[str, Any] | None:
-    """Владелец {"tg_user_id", "username", "name"} или None (не найден / скрыт / воркер недоступен)."""
+async def request_owner(
+    redis: Any, slug: str, timeout: float = 4.0, poll: float = 0.4, max_queue: int = 0
+) -> dict[str, Any] | None:
+    """Владелец {"tg_user_id", "username", "name"} или None (не найден / скрыт / воркер недоступен).
+
+    max_queue > 0 — защита диспетчера: воркер отвечает ~1 запрос/с, и если очередь уже длиннее max_queue, событие
+    не ждёт ответа (иначе при потоке в сотни листингов в минуту диспетчер отстаёт и копит lag).
+    """
     key = CACHE_KEY.format(slug=slug)
     cached = _loads(await redis.get(key))
     if cached is not None:
         return cached or None  # {} — известный промах
     if not isinstance(await redis.get(ALIVE_KEY), (bytes, str)):
         return None  # воркер не запущен (нет входа Telethon): не заставляем уведомление ждать
+    if max_queue > 0:
+        try:
+            qlen = await redis.llen(QUEUE_KEY)
+            if isinstance(qlen, int) and qlen >= max_queue:
+                return None
+        except Exception:  # noqa: BLE001
+            pass
     await redis.lpush(QUEUE_KEY, slug)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
