@@ -166,3 +166,24 @@ async def test_any_gift_filter_matches_every_collection(session: Any) -> None:
     await d.process_listing({"collection_id": str(coll.id), "marketplace": "getgems", "nft_name": "Plush Pepe #5",
                              "nft_index": 5, "price_ton": 10, "seller_ton": "0:seller", "attributes": {}})
     assert [c[0][0] for c in bot.send_message.call_args_list] == [51]
+
+
+async def test_price_range_applies_to_sales(session: Any) -> None:
+    from services.dispatcher import NotificationDispatcher
+
+    coll = Collection(name="Snoop Dogg", contract_address="EQsale_price", source="seed")
+    session.add_all([coll, User(tg_id=61), User(tg_id=62)])
+    await session.flush()
+    session.add_all([Filter(user_id=61, collection_id=None, is_active=True, price_min=100),  # «Любой подарок», только дорогие
+                     Filter(user_id=62, collection_id=None, is_active=True)])
+    await session.commit()
+    bot, redis, resolver = AsyncMock(), AsyncMock(), AsyncMock()
+    redis.get = AsyncMock(return_value=None)
+    d = NotificationDispatcher(bot=bot, session=session, redis=redis, resolver=resolver)
+    sale = {"collection_id": str(coll.id), "nft_address": "0:n", "nft_name": "Snoop Dogg #5", "price_ton": 6.0,
+            "marketplace": "getgems", "attributes": {}}
+    await d.process_sale(sale)
+    assert [c[0][0] for c in bot.send_message.call_args_list] == [62]  # дешёвая продажа не доходит до фильтра «от 100»
+    bot.send_message.reset_mock()
+    await d.process_sale({**sale, "price_ton": 250.0})
+    assert sorted(c[0][0] for c in bot.send_message.call_args_list) == [61, 62]
