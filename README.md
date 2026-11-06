@@ -19,7 +19,7 @@ Redis 7 · React 18 + Vite (TWA) · Docker Compose · Nginx · CryptoBot API
 | `listener-ton` | `python -m bot.listener_main` | события mint из Tonviewer (выключен по умолчанию, `TONVIEWER_ENABLED`) |
 | `listener-market` | `python -m bot.market_main` | TonAPI-синхронизация (с ключом) или листинги GetGems (без ключа) |
 | `resolver` | `python -m bot.resolver_main` | фоновый Telethon-воркер (опционально) |
-| `updater` | `python -m services.updater` | флор-цены и обновление коллекций |
+| `updater` | `python -m services.updater` | seed-каталог и метаданные коллекций; без ключа TonAPI — floors/продажи через GetGems |
 | `twa-api` | `uvicorn api.main:app` | REST + SSE для TWA, вебхук оплаты |
 | `twa-frontend` | nginx со статикой Vite | интерфейс TWA |
 | `nginx` | — | reverse proxy на портах 80/443 |
@@ -27,13 +27,15 @@ Redis 7 · React 18 + Vite (TWA) · Docker Compose · Nginx · CryptoBot API
 ## Структура
 
 ```
-core/       config, logging, redis, retry, graceful shutdown
-db/         модели SQLAlchemy 2.0, Alembic-миграции
-bot/        точки входа сервисов, handlers, admin-команды
-services/   dispatcher, ton/, market/, resolver/, updater, payments, collection_discovery
-api/        FastAPI: /api/collections, /api/filters, SSE, /api/payments/webhook/<secret>
-frontend/   React TWA (Vite), Dockerfile + nginx.conf для раздачи статики
-tests/      pytest (116 тестов)
+core/       config, logging, redis, retry, graceful shutdown, ton_address
+db/         модели SQLAlchemy 2.0, Alembic-миграции (0001–0003), seed/gift_collections.json
+bot/        точки входа сервисов (bot/*_main.py), handlers, admin-команды
+services/   tonapi + tonapi_sync (TonAPI), market/ (GetGems), ton/ (Tonviewer), updater, floors,
+            seed, showcase, dispatcher, resolver/, payments, collection_discovery
+api/        FastAPI: витрина (/api/collections, /api/items, /api/favorites, /api/subscription),
+            фильтры (/api/filters), SSE, вебхук /api/payments/webhook/<secret>
+frontend/   React TWA (Vite, JSX, без роутера/UI-библиотек), Dockerfile + nginx.conf
+tests/      pytest (114 тестов, SQLite in-memory)
 ```
 
 ## Быстрый старт
@@ -41,7 +43,7 @@ tests/      pytest (116 тестов)
 ```bash
 git clone https://github.com/Montihx/GiftTrackApp.git && cd GiftTrackApp
 cp .env.example .env
-nano .env                       # заполните BOT_TOKEN, CRYPTOBOT_TOKEN, ADMIN_TG_IDS, DB_PASS, TWA_URL
+nano .env                       # BOT_TOKEN, CRYPTOBOT_TOKEN, ADMIN_TG_IDS, DB_PASS, TWA_URL, TONAPI_KEY
 # на слабом сервере (< 2 ГБ RAM) собирайте по одному, иначе сборка может повесить машину:
 COMPOSE_PARALLEL_LIMIT=1 docker compose build
 docker compose up -d
@@ -168,7 +170,8 @@ docker compose restart resolver
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 116 тестов
+pytest                          # 114 тестов
+python -m compileall -q core db services bot tests        # то же, что в CI
 cd frontend && npm install && npm run dev   # /api проксируется на localhost:8000
 ```
 
@@ -181,11 +184,14 @@ cd frontend && npm install && npm run dev   # /api проксируется на
 | `docker compose ps` пуст | сборка упала, смотрите `docker compose up -d --build` до первой ошибки |
 | SSE-поток флор-цены обрывается | в nginx должен быть блок `location ~ ^/api/collections/[^/]+/stream$` с `proxy_buffering off` |
 | бот не отвечает | `docker compose logs --tail=50 bot`, проверьте `BOT_TOKEN` |
+| floors «—» при заданном ключе | первый проход ещё идёт (крупные коллекции — до ~12 мин на 1 RPS); `docker compose logs listener-market` |
+| `HTTP 429` от TonAPI в логах | `TONAPI_RPS` выше лимита тарифа (учтите, что ключ делят `listener-market` и `twa-api`) |
+| `HTTP 401` от TonAPI | неверный `TONAPI_KEY` |
+| вебхук оплаты отвечает 401 | `CRYPTOBOT_TOKEN` в `.env` не совпадает с токеном приложения, на которое настроен вебхук |
 
-## Статус
+## Ограничения
 
-Реализованы все модули ТЗ: discovery и updater, TON-листенер, листенер
-маркетплейсов, каскадный резолвер владельцев (включая Telethon-скан bio),
-диспетчер и хендлеры бота, TWA API + React-фронтенд, оплата через CryptoBot, nginx.
-Отличия от ТЗ: фронтенд на JavaScript (JSX), а не TypeScript; точки входа сервисов
-лежат в `bot/*_main.py`.
+- Время листинга/продажи — момент обнаружения (точность = длительность прохода коллекции).
+- Portals, Tonnel, MRKT не подключены (нет публичного API, см. «Источники данных»).
+- `listener-ton` выключен по умолчанию: API Tonviewer недоступен.
+- Отличия от ТЗ: фронтенд на JavaScript (JSX), а не TypeScript.
