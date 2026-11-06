@@ -195,3 +195,37 @@ async def test_dispatcher_hidden_owner_and_buttons(session: Any) -> None:
     await d.process_listing({**base, "seller_tg_id": 5, "seller_username": "vasya", "seller_name": "Vasya"})
     kb = bot.send_message.call_args[1]["reply_markup"]
     assert kb.inline_keyboard[0][0].url == "https://t.me/vasya" and kb.inline_keyboard[1][0].text == "🎁 Открыть подарок"
+
+
+def test_seen_key_ignores_floating_ton_equivalent() -> None:
+    from services.telegram_market import seen_key
+
+    a = parse_resale_gift(unique(1, stars=1500, ton=20.0), {})
+    b = parse_resale_gift(unique(1, stars=1500, ton=20.7), {})  # тот же листинг, курс сдвинулся
+    c = parse_resale_gift(unique(1, stars=1400, ton=19.0), {})  # реальная смена цены
+    d = parse_resale_gift(unique(2, stars=None, ton=5.0), {})
+    assert a and b and c and d
+    assert seen_key(a) == seen_key(b) and seen_key(a) != seen_key(c)
+    assert seen_key(d) == "PlushPepe-2|5.0"
+
+
+async def test_burst_of_new_listings_is_suppressed(session: Any) -> None:
+    coll = Collection(name="Plush Pepe", contract_address="EQburst_tgm", source="seed")
+    session.add(coll)
+    await session.commit()
+
+    @asynccontextmanager
+    async def scope() -> Any:
+        yield session
+
+    redis, client = FakeRedis(), FakeClient()
+    w = TelegramMarketWatcher(client, redis, scope, Settings(tg_market_max_new=3))
+    await w.refresh_catalog()
+    client.resale = [unique(1)]
+    await w.poll_collection(coll.id)  # bootstrap
+    client.resale = [unique(n) for n in range(10, 20)]  # внезапно 10 «новых» — сбой дедупликации, не рассылка
+    assert await w.poll_collection(coll.id) == 0
+    assert redis.stream == [] and w.stats["suppressed"] == 10
+    assert await w.poll_collection(coll.id) == 0  # состояние обновлено — повторов нет
+    client.resale = [unique(n) for n in range(10, 20)] + [unique(99)]
+    assert await w.poll_collection(coll.id) == 1  # а одиночный настоящий листинг проходит
