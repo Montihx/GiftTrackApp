@@ -152,7 +152,7 @@ def _apply_tg(item: dict[str, Any], tg: dict[str, Any] | None) -> None:
     item["onchain_suspect"] = suspect
     cands = {"onchain": None if suspect else onchain, **markets}
     cands = {k: v for k, v in cands.items() if v}
-    best = min(cands, key=cands.get) if cands else None
+    best = min(cands, key=lambda k: cands[k]) if cands else None
     item["best_floor"] = cands[best] if best else None
     item["best_floor_source"] = best
 

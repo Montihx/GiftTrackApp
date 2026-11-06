@@ -11,6 +11,7 @@ from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy import func, select
 
+from bot.msg_utils import uid as _uid
 from core.config import get_settings
 from core.ton_address import normalize_ton_address
 from core.redis_client import STREAM_DLQ, create_redis
@@ -24,14 +25,14 @@ class IsAdmin(BaseFilter):
     """Фильтр роутера: не админ — сообщение идёт дальше к обычным командам (например, /stats пользователя)."""
 
     async def __call__(self, msg: Message) -> bool:
-        return bool(msg.from_user) and get_settings().is_admin(msg.from_user.id)
+        return msg.from_user is not None and get_settings().is_admin(msg.from_user.id)
 
 
 admin_router.message.filter(IsAdmin())
 
 
 def _is_admin(msg: Message) -> bool:
-    return get_settings().is_admin(msg.from_user.id)
+    return get_settings().is_admin(_uid(msg))
 
 
 @admin_router.message(Command("grant"))
@@ -210,8 +211,8 @@ async def cmd_dlq(msg: Message, cmd: CommandObject) -> None:
             await msg.answer("🧯 Очередь ошибок пуста")
             return
         lines = []
-        for _id, fields in rows:
-            f = {(k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v) for k, v in fields.items()}
+        for _id, fields in rows or []:
+            f = {(k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v) for k, v in (fields or {}).items()}
             lines.append(f"{f.get('stream')} {f.get('id')}: {f.get('reason', '')[:200]}")
         await msg.answer("\n".join(lines))
     finally:
@@ -245,7 +246,7 @@ async def cmd_broadcast(msg: Message, cmd: CommandObject, session) -> None:
     count = (await session.execute(select(func.count()).select_from(User).where(User.is_banned.is_(False)))).scalar_one()
     redis = create_redis()
     try:
-        await redis.set(BROADCAST_KEY.format(admin=msg.from_user.id), text.encode(), ex=600)
+        await redis.set(BROADCAST_KEY.format(admin=_uid(msg)), text.encode(), ex=600)
     finally:
         await redis.aclose()
     await msg.answer(f"Отправить {count} пользователям?\n\n{text}\n\nПодтвердите: /broadcast_confirm (10 минут)")
@@ -257,19 +258,19 @@ async def cmd_broadcast_confirm(msg: Message, session) -> None:
         return
     redis = create_redis()
     try:
-        raw = await redis.get(BROADCAST_KEY.format(admin=msg.from_user.id))
-        await redis.delete(BROADCAST_KEY.format(admin=msg.from_user.id))
+        raw = await redis.get(BROADCAST_KEY.format(admin=_uid(msg)))
+        await redis.delete(BROADCAST_KEY.format(admin=_uid(msg)))
     finally:
         await redis.aclose()
     if not raw:
         await msg.answer("Нет текста для рассылки (или прошло 10 минут): сначала /broadcast <текст>")
         return
-    text = raw.decode()
+    text = raw.decode() if isinstance(raw, bytes) else str(raw)
     ids = [r[0] for r in (await session.execute(select(User.tg_id).where(User.is_banned.is_(False)))).all()]
     sent = failed = 0
     for tg_id in ids:
         try:
-            await msg.bot.send_message(tg_id, text)
+            await msg.bot.send_message(tg_id, text)  # type: ignore[union-attr]
             sent += 1
         except Exception:  # noqa: BLE001 — заблокировали бота и т. п.
             failed += 1

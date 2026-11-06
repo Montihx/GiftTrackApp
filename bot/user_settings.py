@@ -6,6 +6,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy import func, select
 
+from bot.msg_utils import sender as _fu, uid as _uid
 from db.models import Filter, User
 from services.user_settings import describe_status
 
@@ -13,9 +14,9 @@ settings_router = Router()
 
 
 async def _user(session, msg: Message) -> User:
-    user = (await session.execute(select(User).where(User.tg_id == msg.from_user.id))).scalar_one_or_none()
+    user = (await session.execute(select(User).where(User.tg_id == _uid(msg)))).scalar_one_or_none()
     if user is None:
-        user = User(tg_id=msg.from_user.id, username=msg.from_user.username, first_name=msg.from_user.first_name)
+        user = User(tg_id=_uid(msg), username=_fu(msg).username, first_name=_fu(msg).first_name)
         session.add(user)
         await session.flush()
     return user

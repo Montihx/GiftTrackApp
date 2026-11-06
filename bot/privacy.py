@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from sqlalchemy import delete
 
+from bot.msg_utils import sender as _fu, uid as _uid
 from db.models import Favorite, Filter, User
 
 privacy_router = Router()
@@ -34,6 +35,6 @@ async def delete_user_data(session, tg_id: int) -> None:
 
 @privacy_router.message(Command("delete_me"))
 async def cmd_delete_me(msg: Message, session) -> None:
-    await delete_user_data(session, msg.from_user.id)
+    await delete_user_data(session, _uid(msg))
     await session.flush()
     await msg.answer("🗑 Ваши данные удалены: фильтры, избранное и подписка. Чтобы начать заново, нажмите /start.")

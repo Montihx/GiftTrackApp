@@ -374,7 +374,7 @@ class TonApiSync:
         from services.gift_discovery import raw_address
 
         target = raw_address(raw_addr)
-        if not getattr(self, "_coll_cache", None) or target not in self._coll_cache:
+        if not getattr(self, "_coll_cache", None) or target not in self._coll_cache:  # type: ignore[has-type]
             rows = (await self.session.execute(select(Collection))).scalars().all()
             self._coll_cache = {raw_address(c.contract_address): c.id for c in rows
                                 if not c.contract_address.startswith("tg_gift:")}
