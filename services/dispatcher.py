@@ -373,7 +373,12 @@ class NotificationDispatcher:
         """Обработка события продажи -> «GIFT SOLD!» подписчикам коллекции/модели."""
         collection_id = _parse_uuid(payload.get("collection_id"))
         text = format_sale_message(payload)
-        await self._send_to_subscribers(collection_id, payload.get("attributes") or {}, text, None)
+        # Диапазоны фильтра «Номер» и «Цена» действуют и на продажи (цена продажи), иначе «Любой подарок» заваливает дешёвыми
+        price = float(payload.get("price_ton") or 0) or None
+        await self._send_to_subscribers(
+            collection_id, payload.get("attributes") or {}, text, None,
+            kind="sale", number=gift_number(payload.get("nft_name"), payload.get("slug")), price=price,
+        )
         self.stats["sales"] += 1
 
     async def _find_owner(
@@ -445,7 +450,7 @@ class NotificationDispatcher:
                 continue  # фильтр просит слать только с контактом владельца
             if not _in_range(number, f.number_min, f.number_max):
                 continue
-            if kind == "listing" and not _in_range(price, f.price_min, f.price_max):
+            if kind in ("listing", "sale") and not _in_range(price, f.price_min, f.price_max):
                 continue
             ok = True
             for fid, key in ((f.model_id, "model"), (f.background_id, "background"),
