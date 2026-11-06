@@ -35,7 +35,7 @@ services/   tonapi + tonapi_sync + gift_discovery (TonAPI), market/ (GetGems), t
 api/        FastAPI: витрина (/api/collections, /api/items, /api/favorites, /api/subscription),
             фильтры (/api/filters), SSE, вебхук /api/payments/webhook/<secret>
 frontend/   React TWA (Vite, JSX, без роутера/UI-библиотек), Dockerfile + nginx.conf
-tests/      pytest (114 тестов, SQLite in-memory)
+tests/      pytest (118 тестов, SQLite in-memory)
 ```
 
 ## Быстрый старт
@@ -144,12 +144,19 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 «Fragment Gift Minter» (владелец неизвестен); маркет — `sale.market.name` («Getgems Sales»,
 «Marketapp Marketplace»). Первый проход каждой коллекции — без уведомлений.
 
-**Лимиты.** Free-тариф tonconsole — 1 RPS; все запросы процесса идут через общий limiter
-(`TONAPI_RPS`). За цикл на коллекцию читается до `TONAPI_PAGES_PER_CYCLE` страниц по 1000 items;
-крупные коллекции (Toy Bear ~30k, Homemade Cake ~34k) проходятся за несколько циклов, и их floor
-обновляется раз в проход. 21 коллекция ≈ 217k items ≈ 217 запросов на полный проход: на 1 RPS цикл
-занимает ~1 мин, мелкие коллекции обновляются каждую минуту, самые крупные — раз в ~12 мин.
-На платном тарифе поднимите `TONAPI_RPS` — цикл упрётся в `TONAPI_POLL_INTERVAL` (15 с).
+**Лимиты.** Free-тариф tonconsole — 1 RPS (проверено: ~3–10% запросов получают 429 и проходят
+с ретраем); все запросы процесса идут через общий limiter (`TONAPI_RPS`). За цикл на коллекцию
+читается до `TONAPI_PAGES_PER_CYCLE` страниц по 1000 items; крупные коллекции проходятся за
+несколько циклов, и их floor обновляется раз в проход. Замеры (2026-11):
+
+| Каталог | Items | Запросов за цикл | Цикл на 1 RPS | Полный проход самой крупной |
+|---|---|---|---|---|
+| seed, 21 коллекция | ~217 тыс. | ~65 | ~1 мин | ~12 мин (Homemade Cake, 34k) |
+| с автообнаружением, ~122 коллекции | ~1,5 млн | ~330 | ~5–6 мин | ~2 ч (Lol Pop, 70k) |
+
+То есть с автообнаружением на free-тарифе листинги мелких коллекций приходят с задержкой до ~6 мин,
+а floor крупных обновляется раз в ~2 ч. На платном тарифе поднимите `TONAPI_RPS` (на 10 RPS цикл
+~35 с, полный проход ~15 мин); либо выключите автообнаружение (`TONAPI_DISCOVERY_ENABLED=false`).
 Ключ общий для `listener-market` и `twa-api` (цена предмета на витрине) — учитывайте это в `TONAPI_RPS`.
 
 **Без ключа** витрина показывает seed-каталог, floor «—», график — empty-state; `listener-market`
@@ -184,7 +191,7 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 114 тестов
+pytest                          # 118 тестов
 python -m compileall -q core db services bot tests        # то же, что в CI
 cd frontend && npm install && npm run dev   # /api проксируется на localhost:8000
 ```
