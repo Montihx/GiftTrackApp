@@ -105,3 +105,17 @@ async def test_filter_require_owner_gates_ownerless_alerts(session: Any) -> None
                              "metadata": {"name": "Plush Pepe #5", "model": "Amalgam", "symbol": "Moon"}})
     assert [c[0][0] for c in bot.send_message.call_args_list] == [22]
     assert "АПГРЕЙД" in bot.send_message.call_args[0][1] and "Символ: Moon" in bot.send_message.call_args[0][1]
+
+
+def test_value_from_info_units() -> None:
+    from types import SimpleNamespace
+
+    from services.owner_lookup import value_from_info
+
+    ton = value_from_info(SimpleNamespace(currency="ton", value=3_801_000_000_000, floor_price=3_000_000_000_000,
+                                          average_price=None, last_sale_price=None, listed_count=12))
+    assert ton == {"currency": "TON", "value": 3801.0, "floor": 3000.0, "average": None, "last_sale": None, "listed": 12}
+    usd = value_from_info(SimpleNamespace(currency="USD", value=410050, floor_price=None, average_price=None,
+                                          last_sale_price=380000, listed_count=None))
+    assert usd is not None and usd["value"] == 4100.5 and usd["last_sale"] == 3800.0
+    assert value_from_info(SimpleNamespace(currency="TON", value=None)) is None

@@ -11,9 +11,9 @@ const SORTS = [
 ];
 
 function sortValue(c, sort) {
-  if (sort === "floor") return c.floor_price;
+  if (sort === "floor") return c.best_floor ?? c.floor_price;
   if (sort === "change") return c.floor_24h_change;
-  return c.items_count;
+  return c.issued_count ?? c.items_count;
 }
 
 export function CollectionCard({ c, onOpen }) {
@@ -21,10 +21,13 @@ export function CollectionCard({ c, onOpen }) {
     <button className="ccard" onClick={() => onOpen(c)}>
       <CollectionIcon url={c.icon_url} name={c.name} size={48} />
       <div className="ccard-name">{c.name}</div>
-      <div className="ccard-floor">{fmtTon(c.floor_price)}</div>
+      <div className="ccard-floor">
+        {fmtTon(c.best_floor ?? c.floor_price)}
+        {c.best_floor_source === "telegram" && <span className="src" title="Флор маркета Telegram">TG</span>}
+      </div>
       <div className="ccard-meta">
         <ChangeBadge value={c.floor_24h_change} />
-        <span className="ccard-count">{c.items_count > 0 ? `${c.items_count.toLocaleString("ru-RU")} шт.` : "—"}</span>
+        <span className="ccard-count">{(c.issued_count ?? c.items_count) > 0 ? `${(c.issued_count ?? c.items_count).toLocaleString("ru-RU")} шт.` : "—"}</span>
       </div>
     </button>
   );

@@ -175,3 +175,47 @@ async def test_collection_attributes_endpoint(session):
             assert (await client.get("/api/collections/00000000-0000-0000-0000-000000000000/attributes")).status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+def test_apply_tg_merges_onchain_and_telegram_floor() -> None:
+    from api.showcase import _apply_tg
+
+    item = {"floor_price": 15.0}
+    _apply_tg(item, {"issued_count": 2825, "tg_listed": 40, "tg_floor_stars": 20000, "tg_floor_price": 280.5})
+    assert item["issued_count"] == 2825 and item["tg_floor_price"] == 280.5
+    assert item["best_floor"] == 15.0 and item["best_floor_source"] == "onchain"  # дешевле в блокчейне
+    cheaper = {"floor_price": 400.0}
+    _apply_tg(cheaper, {"tg_floor_price": 280.5})
+    assert cheaper["best_floor"] == 280.5 and cheaper["best_floor_source"] == "telegram"
+    none = {"floor_price": None}
+    _apply_tg(none, None)
+    assert none["best_floor"] is None and none["issued_count"] is None
+
+
+@pytest.mark.asyncio
+async def test_tg_stats_reads_redis_keys(monkeypatch):
+    import orjson
+
+    import api.showcase as showcase_module
+
+    store = {
+        "tg_market:floor:c1": orjson.dumps({"min_stars": 10000, "listed": 33}),
+        "tg_market:stats:c1": orjson.dumps({"issued": 2825, "listed": 30, "ton_per_star": 0.0136}),
+        "tg_market:rate": orjson.dumps(0.0100),
+        "tg_market:stats:c2": orjson.dumps({"issued": 100}),
+        "tg_market:floor:c2": orjson.dumps({"min_stars": 5000, "listed": None}),
+    }
+
+    class FakeRedis:
+        async def mget(self, keys):
+            return [store.get(k) for k in keys]
+
+        async def aclose(self):
+            pass
+
+    import core.redis_client as rc
+
+    monkeypatch.setattr(rc, "create_redis", lambda: FakeRedis())
+    out = await showcase_module._tg_stats(["c1", "c2"])
+    assert out["c1"] == {"issued_count": 2825, "tg_listed": 33, "tg_floor_stars": 10000, "tg_floor_price": 136.0}
+    assert out["c2"]["tg_floor_price"] == 50.0 and out["c2"]["tg_listed"] is None  # курс — общий, если нет своего

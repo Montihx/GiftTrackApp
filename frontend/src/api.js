@@ -43,11 +43,14 @@ export function cachedGet(path, ttlMs = 60000) {
   return { cached: hit ? hit.data : null, promise };
 }
 
-// Цена в TON; null -> «—» (источник цен не подключен или листингов нет)
+// Название нативной монеты (TonAPI и GetGems называют её GRAM; было TON) — меняется VITE_COIN при сборке
+export const COIN = import.meta.env.VITE_COIN || "GRAM";
+
+// Цена в монете; null -> «—» (источник цен не подключен или листингов нет)
 export function fmtTon(v) {
   if (v == null) return "—";
   const n = Number(v);
-  return `${n.toLocaleString("ru-RU", { maximumFractionDigits: n >= 100 ? 0 : 2 })} TON`;
+  return `${n.toLocaleString("ru-RU", { maximumFractionDigits: n >= 100 ? 0 : 2 })} ${COIN}`;
 }
 
 export function fmtChange(v) {

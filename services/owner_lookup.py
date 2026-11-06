@@ -63,6 +63,31 @@ async def request_owner(redis: Any, slug: str, timeout: float = 4.0, poll: float
     return None
 
 
+def _amount(raw: int | None, currency: str) -> float | None:
+    """Сумма из минимальных единиц валюты: TON — нано, Stars (XTR) — как есть, фиат — центы."""
+    if raw is None:
+        return None
+    if currency == "TON":
+        return raw / 1e9
+    if currency == "XTR":
+        return float(raw)
+    return raw / 100
+
+
+def value_from_info(info: Any) -> dict[str, Any] | None:
+    currency = str(getattr(info, "currency", "") or "").upper()
+    value = _amount(getattr(info, "value", None), currency)
+    if value is None:
+        return None
+    return {
+        "currency": currency, "value": value,
+        "floor": _amount(getattr(info, "floor_price", None), currency),
+        "average": _amount(getattr(info, "average_price", None), currency),
+        "last_sale": _amount(getattr(info, "last_sale_price", None), currency),
+        "listed": getattr(info, "listed_count", None),
+    }
+
+
 class OwnerLookupWorker:
     def __init__(self, client: Any, redis: Any, interval: float = 1.0) -> None:
         self.client = client
@@ -86,9 +111,27 @@ class OwnerLookupWorker:
         users = {u.id: u for u in getattr(res, "users", None) or []}
         chats = {c.id: c for c in getattr(res, "chats", None) or []}
         item = parse_resale_gift(res.gift, users, chats)
-        if item is None or not (item["seller_tg_id"] or item["seller_username"]):
-            return {}
-        return {"tg_user_id": item["seller_tg_id"], "username": item["seller_username"], "name": item["seller_name"]}
+        out: dict[str, Any] = {}
+        if item is not None and (item["seller_tg_id"] or item["seller_username"]):
+            out = {"tg_user_id": item["seller_tg_id"], "username": item["seller_username"], "name": item["seller_name"]}
+        value = await self._value(slug)
+        if value:
+            out["value"] = value
+        return out
+
+    async def _value(self, slug: str) -> dict[str, Any] | None:
+        """Оценка подарка (то, что see.tg показывает как «Оценка»): payments.getUniqueStarGiftValueInfo."""
+        from telethon import errors
+        from telethon.tl import functions
+
+        try:
+            info = await self.client(functions.payments.GetUniqueStarGiftValueInfoRequest(slug=slug))
+        except errors.FloodWaitError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — оценки может не быть: уведомление уйдёт без неё
+            logger.debug(f"[owner_lookup] оценка {slug}: {exc!r}")
+            return None
+        return value_from_info(info)
 
     async def handle(self, slug: str) -> dict[str, Any]:
         key = CACHE_KEY.format(slug=slug)
@@ -101,7 +144,7 @@ class OwnerLookupWorker:
             logger.debug(f"[owner_lookup] {slug}: {exc!r}")
             owner = {}
         self.stats["lookups"] += 1
-        self.stats["found" if owner else "hidden"] += 1
+        self.stats["found" if (owner.get("username") or owner.get("tg_user_id")) else "hidden"] += 1
         await self.redis.set(key, orjson.dumps(owner), ex=HIT_TTL if owner else MISS_TTL)
         return owner
 

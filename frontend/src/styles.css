@@ -206,3 +206,7 @@ button.row-item { cursor: pointer; }
 .check span { font-size: 15px; line-height: 1.35; }
 .check small { display: block; margin-top: 3px; color: var(--muted); font-size: 12.5px; }
 .form .check input { width: 22px; padding: 0; }
+
+/* источник флора на карточке */
+.ccard-floor .src { margin-left: 6px; padding: 1px 5px; border-radius: 5px; font-size: 10px; font-weight: 700;
+  vertical-align: middle; color: #1c1a10; background: var(--gold); }
