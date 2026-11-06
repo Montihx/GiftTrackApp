@@ -77,6 +77,8 @@ class FakeClient:
         if isinstance(request, functions.payments.GetResaleStarGiftsRequest):
             users = [types.User(id=777, username="seller777")]
             return types.payments.ResaleStarGifts(count=len(self.resale), gifts=self.resale, chats=[], users=users)
+        if isinstance(request, functions.payments.GetStarGiftUpgradeAttributesRequest):
+            return types.payments.StarGiftUpgradeAttributes(attributes=unique(1).attributes)
         raise AssertionError(request)
 
 
@@ -229,3 +231,31 @@ async def test_burst_of_new_listings_is_suppressed(session: Any) -> None:
     assert await w.poll_collection(coll.id) == 0  # состояние обновлено — повторов нет
     client.resale = [unique(n) for n in range(10, 20)] + [unique(99)]
     assert await w.poll_collection(coll.id) == 1  # а одиночный настоящий листинг проходит
+
+
+async def test_seed_attributes_fills_only_empty_collections(session: Any) -> None:
+    from sqlalchemy import select
+
+    from db.models import Attribute
+    from services.telegram_market import attribute_rows
+
+    assert attribute_rows(unique(1).attributes) == [("model", "Amalgam"), ("background", "Dark Lilac"), ("symbol", "Wolf Rage")]
+
+    empty = Collection(name="Plush Pepe", contract_address="EQseed_empty", source="tonapi")
+    full = Collection(name="Unknown Gift", contract_address="EQseed_full", source="seed")
+    session.add_all([empty, full])
+    await session.flush()
+    session.add(Attribute(collection_id=full.id, type="model", value="Existing"))
+    await session.commit()
+
+    @asynccontextmanager
+    async def scope() -> Any:
+        yield session
+
+    w = TelegramMarketWatcher(FakeClient(), FakeRedis(), scope, Settings())
+    await w.refresh_catalog()
+    w.gift_ids[full.id] = 5555  # у «полной» коллекции тоже есть подарок в каталоге — но атрибуты у неё уже есть
+    assert await w.seed_attributes() == 1
+    rows = (await session.execute(select(Attribute.type, Attribute.value).where(Attribute.collection_id == empty.id))).all()
+    assert sorted(rows) == [("background", "Dark Lilac"), ("model", "Amalgam"), ("symbol", "Wolf Rage")]
+    assert await w.seed_attributes() == 0  # повторно не запрашиваем

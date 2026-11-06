@@ -10,8 +10,15 @@ const EMPTY_FORM = {
   symbol: "",
   floor_min: "",
   floor_max: "",
-  require_owner: true, // слать только если можно написать владельцу
+  require_owner: true, // листинги: только если можно написать владельцу
+  require_owner_upgrade: true, // апгрейды: то же
+  number_min: "",
+  number_max: "",
+  price_min: "",
+  price_max: "",
 };
+
+const numOrNull = (v) => (v === "" || v == null ? null : Number(v));
 
 // Выпадающий список с поиском по буквам (без сторонних UI-библиотек)
 function SearchSelect({ label, placeholder, anyLabel, options, value, onChange, renderIcon, loading = false }) {
@@ -183,7 +190,11 @@ export default function Filters() {
 
   const floorMin = form.floor_min === "" ? null : Number(form.floor_min);
   const floorMax = form.floor_max === "" ? null : Number(form.floor_max);
-  const rangeError = floorMin != null && floorMax != null && floorMin > floorMax;
+  const bad = (a, b) => a != null && b != null && a > b;
+  const rangeError =
+    bad(floorMin, floorMax) ||
+    bad(numOrNull(form.number_min), numOrNull(form.number_max)) ||
+    bad(numOrNull(form.price_min), numOrNull(form.price_max));
 
   const cancel = () => {
     setForm(EMPTY_FORM);
@@ -204,6 +215,11 @@ export default function Filters() {
         floor_min: floorMin,
         floor_max: floorMax,
         require_owner: form.require_owner,
+        require_owner_upgrade: form.require_owner_upgrade,
+        number_min: numOrNull(form.number_min),
+        number_max: numOrNull(form.number_max),
+        price_min: numOrNull(form.price_min),
+        price_max: numOrNull(form.price_max),
       });
       setMsg("Фильтр создан ✓");
       setForm(EMPTY_FORM);
@@ -234,8 +250,17 @@ export default function Filters() {
     if (f.floor_min != null || f.floor_max != null) {
       parts.push(`Флор модели ${f.floor_min != null ? `от ${f.floor_min}` : ""} ${f.floor_max != null ? `до ${f.floor_max}` : ""} ${COIN}`.replace(/\s+/g, " "));
     }
+    if (f.number_min != null || f.number_max != null) {
+      parts.push(`Номер ${f.number_min != null ? `от ${f.number_min}` : ""} ${f.number_max != null ? `до ${f.number_max}` : ""}`.replace(/\s+/g, " "));
+    }
+    if (f.price_min != null || f.price_max != null) {
+      parts.push(`Цена ${f.price_min != null ? `от ${f.price_min}` : ""} ${f.price_max != null ? `до ${f.price_max}` : ""} ${COIN}`.replace(/\s+/g, " "));
+    }
     const base = parts.length ? parts.join(" · ") : "Все листинги и продажи";
-    return f.require_owner === false ? `${base} · даже без контакта владельца` : base;
+    const noContact = [];
+    if (f.require_owner === false) noContact.push("листинги");
+    if (f.require_owner_upgrade === false) noContact.push("апгрейды");
+    return noContact.length ? `${base} · без контакта владельца: ${noContact.join(", ")}` : base;
   };
 
   return (
@@ -345,7 +370,39 @@ export default function Filters() {
             {selectedModel && selectedModel.floor != null && (
               <div className="fblock-hint">Сейчас флор модели {selectedModel.value}: {fmtTon(selectedModel.floor)}</div>
             )}
-            {rangeError && <div className="fblock-err">«от» больше, чем «до»</div>}
+            {rangeError && <div className="fblock-err">«от» больше, чем «до» в одном из диапазонов</div>}
+          </div>
+
+          <div className="fblock">
+            <div className="fblock-title">Номер подарка</div>
+            <div className="row">
+              <div>
+                <label>от</label>
+                <input type="number" inputMode="numeric" min="0" step="1" value={form.number_min}
+                  onChange={(e) => setField("number_min", e.target.value)} placeholder="1" />
+              </div>
+              <div>
+                <label>до</label>
+                <input type="number" inputMode="numeric" min="0" step="1" value={form.number_max}
+                  onChange={(e) => setField("number_max", e.target.value)} placeholder="∞" />
+              </div>
+            </div>
+          </div>
+
+          <div className="fblock">
+            <div className="fblock-title">Цена листинга ({COIN})</div>
+            <div className="row">
+              <div>
+                <label>от</label>
+                <input type="number" inputMode="decimal" min="0" step="0.01" value={form.price_min}
+                  onChange={(e) => setField("price_min", e.target.value)} placeholder="0" />
+              </div>
+              <div>
+                <label>до</label>
+                <input type="number" inputMode="decimal" min="0" step="0.01" value={form.price_max}
+                  onChange={(e) => setField("price_max", e.target.value)} placeholder="∞" />
+              </div>
+            </div>
           </div>
 
           <label className="check">
@@ -355,8 +412,20 @@ export default function Filters() {
               onChange={(e) => setField("require_owner", e.target.checked)}
             />
             <span>
-              Только если можно написать владельцу
-              <small>Выключите, чтобы получать листинги и апгрейды и без контакта продавца</small>
+              Листинги: только если можно написать владельцу
+              <small>Выключите, чтобы получать листинги и без контакта продавца</small>
+            </span>
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.require_owner_upgrade}
+              onChange={(e) => setField("require_owner_upgrade", e.target.checked)}
+            />
+            <span>
+              Апгрейды: только если можно написать владельцу
+              <small>Выключите, чтобы получать апгрейды и без контакта владельца</small>
             </span>
           </label>
 

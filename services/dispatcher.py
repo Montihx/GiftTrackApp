@@ -107,6 +107,26 @@ def _valuation_lines(info: dict[str, Any]) -> list[str]:
     return lines
 
 
+def gift_number(name: str | None, slug: str | None = None) -> int | None:
+    """Номер подарка: «Plush Pepe #727» или slug «PlushPepe-727»."""
+    import re
+
+    for src, pat in ((name, r"#\s*(\d+)"), (slug, r"-(\d+)$")):
+        m = re.search(pat, src or "")
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _in_range(value: float | int | None, lo: Any, hi: Any) -> bool:
+    """Диапазон фильтра; если он задан, а значение неизвестно — не шлём (как «Флор модели»)."""
+    if lo is None and hi is None:
+        return True
+    if value is None:
+        return False
+    return not ((lo is not None and value < float(lo)) or (hi is not None and value > float(hi)))
+
+
 def _has_contact(owner: dict[str, Any]) -> bool:
     return bool(owner.get("username") or owner.get("tg_user_id"))
 
@@ -231,7 +251,8 @@ class NotificationDispatcher:
         keyboard = self._owner_keyboard(owner, gift_link=tme)
 
         await self._send_to_subscribers(
-            collection_id, metadata, text, keyboard, has_contact=_has_contact(owner), preview_url=tme
+            collection_id, metadata, text, keyboard, has_contact=_has_contact(owner), preview_url=tme,
+            kind="upgrade", number=gift_number(name, slug),
         )
         self.stats["upgrades"] += 1
 
@@ -342,7 +363,8 @@ class NotificationDispatcher:
         keyboard = self._owner_keyboard(owner, gift_link=tme or link)
 
         await self._send_to_subscribers(
-            collection_id, attributes, text, keyboard, has_contact=_has_contact(owner), preview_url=tme
+            collection_id, attributes, text, keyboard, has_contact=_has_contact(owner), preview_url=tme,
+            kind="listing", number=gift_number(title, slug), price=float(price) if price else None,
         )
         self.stats["listings"] += 1
 
@@ -383,6 +405,9 @@ class NotificationDispatcher:
         keyboard: InlineKeyboardMarkup | None,
         has_contact: bool = True,
         preview_url: str | None = None,
+        kind: str = "sale",
+        number: int | None = None,
+        price: float | None = None,
     ) -> None:
         """Находит подписчиков с подходящими фильтрами и шлёт им сообщение параллельно.
 
@@ -413,8 +438,14 @@ class NotificationDispatcher:
 
         target_users = set()
         for f in filters:
-            if not has_contact and f.require_owner:
+            if not has_contact and (
+                (kind == "listing" and f.require_owner) or (kind == "upgrade" and f.require_owner_upgrade)
+            ):
                 continue  # фильтр просит слать только с контактом владельца
+            if not _in_range(number, f.number_min, f.number_max):
+                continue
+            if kind == "listing" and not _in_range(price, f.price_min, f.price_max):
+                continue
             ok = True
             for fid, key in ((f.model_id, "model"), (f.background_id, "background"),
                              (f.symbol_id, "symbol"), (f.pattern_id, "pattern")):

@@ -79,10 +79,13 @@ async def test_filter_require_owner_gates_ownerless_alerts(session: Any) -> None
     from services.dispatcher import NotificationDispatcher
 
     coll = Collection(name="Plush Pepe", contract_address="EQgate_owner", source="seed")
-    session.add_all([coll, User(tg_id=21), User(tg_id=22)])
+    session.add_all([coll, User(tg_id=21), User(tg_id=22), User(tg_id=23)])
     await session.flush()
     session.add_all([Filter(user_id=21, collection_id=coll.id, is_active=True),  # require_owner по умолчанию
-                     Filter(user_id=22, collection_id=coll.id, is_active=True, require_owner=False)])
+                     Filter(user_id=22, collection_id=coll.id, is_active=True, require_owner=False,
+                            require_owner_upgrade=False),
+                     # листинги без контакта можно, апгрейды — только с контактом (две отдельные галочки)
+                     Filter(user_id=23, collection_id=coll.id, is_active=True, require_owner=False)])
     await session.commit()
 
     bot, redis, resolver = AsyncMock(), AsyncMock(), AsyncMock()
@@ -92,12 +95,12 @@ async def test_filter_require_owner_gates_ownerless_alerts(session: Any) -> None
     base = {"collection_id": str(coll.id), "marketplace": "getgems", "nft_name": "Plush Pepe #5", "nft_index": 5,
             "price_ton": 10, "seller_ton": "0:seller", "attributes": {}}
     await d.process_listing(base)
-    assert [c[0][0] for c in bot.send_message.call_args_list] == [22]  # только тот, кто разрешил слать без контакта
+    assert [c[0][0] for c in bot.send_message.call_args_list] == [22, 23]  # только те, кто разрешил слать листинги без контакта
 
     bot.send_message.reset_mock()
     resolver.resolve = AsyncMock(return_value={"tg_user_id": 77, "username": "seller"})
     await d.process_listing(base)
-    assert sorted(c[0][0] for c in bot.send_message.call_args_list) == [21, 22]  # контакт есть — получают оба
+    assert sorted(c[0][0] for c in bot.send_message.call_args_list) == [21, 22, 23]  # контакт есть — получают все
 
     bot.send_message.reset_mock()
     resolver.resolve = AsyncMock(return_value={})
@@ -119,3 +122,30 @@ def test_value_from_info_units() -> None:
                                           last_sale_price=380000, listed_count=None))
     assert usd is not None and usd["value"] == 4100.5 and usd["last_sale"] == 3800.0
     assert value_from_info(SimpleNamespace(currency="TON", value=None)) is None
+
+
+async def test_number_and_price_ranges_filter_alerts(session: Any) -> None:
+    from services.dispatcher import NotificationDispatcher, gift_number
+
+    assert gift_number("Plush Pepe #727") == 727 and gift_number(None, "PlushPepe-42") == 42 and gift_number("x") is None
+
+    coll = Collection(name="Plush Pepe", contract_address="EQnum_price", source="seed")
+    session.add_all([coll, User(tg_id=41), User(tg_id=42), User(tg_id=43)])
+    await session.flush()
+    session.add_all([
+        Filter(user_id=41, collection_id=coll.id, is_active=True, require_owner=False, number_max=100),
+        Filter(user_id=42, collection_id=coll.id, is_active=True, require_owner=False, price_min=50),
+        Filter(user_id=43, collection_id=coll.id, is_active=True, require_owner=False, number_min=1, price_max=20),
+    ])
+    await session.commit()
+    bot, redis, resolver = AsyncMock(), AsyncMock(), AsyncMock()
+    redis.get = AsyncMock(return_value=None)
+    resolver.resolve = AsyncMock(return_value={})
+    d = NotificationDispatcher(bot=bot, session=session, redis=redis, resolver=resolver)
+    base = {"collection_id": str(coll.id), "marketplace": "getgems", "nft_name": "Plush Pepe #5", "nft_index": 5,
+            "price_ton": 10, "seller_ton": "0:seller", "attributes": {}}
+    await d.process_listing(base)  # №5, цена 10 -> #41 (номер<=100) и #43 (номер>=1, цена<=20); #42 нужна цена>=50
+    assert sorted(c[0][0] for c in bot.send_message.call_args_list) == [41, 43]
+    bot.send_message.reset_mock()
+    await d.process_listing({**base, "nft_name": "Plush Pepe #500", "price_ton": 60})
+    assert sorted(c[0][0] for c in bot.send_message.call_args_list) == [42]

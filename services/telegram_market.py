@@ -29,7 +29,7 @@ from sqlalchemy import select
 
 from core.config import Settings
 from core.redis_client import STREAM_NFT_LISTINGS, cache_set_json, stream_publish
-from db.models import Collection, Favorite, Filter
+from db.models import Attribute, Collection, Favorite, Filter
 
 SEEN_KEY = "tg_market:seen:{cid}"
 FLOOR_KEY = "tg_market:floor:{cid}"
@@ -83,6 +83,24 @@ def parse_resale_gift(gift: Any, users: dict[int, Any], chats: dict[int, Any] | 
     }
 
 
+def attribute_rows(attrs: list[Any]) -> list[tuple[str, str]]:
+    """Атрибуты улучшения подарка Telegram -> (тип, значение) для таблицы attributes.
+
+    Узор подарка в интерфейсе называется «Символ», поэтому Telegram-pattern хранится как symbol.
+    """
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for a in attrs:
+        cls = type(a).__name__
+        typ = {"StarGiftAttributeModel": "model", "StarGiftAttributeBackdrop": "background",
+               "StarGiftAttributePattern": "symbol"}.get(cls)
+        name = getattr(a, "name", None)
+        if typ and name and (typ, name) not in seen:
+            seen.add((typ, name))
+            out.append((typ, str(name)))
+    return out
+
+
 def ton_per_star(items: list[dict[str, Any]]) -> float | None:
     """Курс из листингов, где Telegram показывает обе цены (цена в TON — пересчёт из Stars)."""
     ratios = sorted(i["price_ton"] / i["price_stars"] for i in items if i["price_ton"] and i["price_stars"])
@@ -116,7 +134,8 @@ class TelegramMarketWatcher:
         self._cold_pos = 0
         self._round: list[Any] = []
         self._catalog_at: float | None = None
-        self.stats = {"catalog": 0, "polls": 0, "listings": 0, "flood_waits": 0, "errors": 0}
+        self.stats = {"catalog": 0, "polls": 0, "listings": 0, "flood_waits": 0, "errors": 0, "seeded": 0}
+        self._seeded: set[Any] = set()
 
     async def _call(self, request: Any) -> Any:
         from telethon import errors
@@ -163,6 +182,37 @@ class TelegramMarketWatcher:
         self.stats["catalog"] += 1
         logger.info(f"[tg_market] каталог: {len(self.gift_ids)} коллекций, горячих {len(self.hot)}")
         return len(self.gift_ids)
+
+    async def seed_attributes(self, limit: int = 3) -> int:
+        """Новая коллекция без атрибутов: модели/фоны/символы берём у Telegram (список улучшения подарка).
+
+        Пока ончейн-скан не дошёл до коллекции, её страница пуста — а список моделей нужен фильтрам.
+        Заполняются только коллекции, у которых атрибутов ещё нет, не больше `limit` за вызов;
+        ончейн-синхронизация потом дополнит те же строки (уникальность collection+type+value).
+        """
+        from telethon.tl import functions
+
+        done = 0
+        async with self.session_scope() as session:
+            have = {r[0] for r in (await session.execute(select(Attribute.collection_id).distinct())).all()}
+        for cid, gift_id in list(self.gift_ids.items()):
+            if done >= limit:
+                break
+            if cid in have or cid in self._seeded:
+                continue
+            self._seeded.add(cid)
+            res = await self._call(functions.payments.GetStarGiftUpgradeAttributesRequest(gift_id=gift_id))
+            rows = attribute_rows(getattr(res, "attributes", None) or [])
+            if not rows:
+                continue
+            async with self.session_scope() as session:
+                for typ, value in rows:
+                    session.add(Attribute(collection_id=cid, type=typ, value=value))
+                await session.flush()
+            done += 1
+            self.stats["seeded"] += 1
+            logger.info(f"[tg_market] {self.collections[cid][0]}: атрибутов из Telegram: {len(rows)}")
+        return done
 
     def next_collection(self) -> Any | None:
         """Очередь опроса: все горячие + следующие tg_market_cold_per_round холодных, по кругу."""
@@ -256,6 +306,7 @@ class TelegramMarketWatcher:
                        time.monotonic() - self._catalog_at >= self.settings.tg_market_catalog_interval)
                 if due:
                     await self.refresh_catalog()
+                    await self.seed_attributes()
                 cid = self.next_collection()
                 if cid is not None:
                     await self.poll_collection(cid)
