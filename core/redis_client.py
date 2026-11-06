@@ -13,6 +13,7 @@ from core.config import get_settings
 STREAM_ALERTS_HOT = "alerts:hot"       # мгновенная доставка алертов
 STREAM_NFT_UPGRADES = "nft_upgrades"   # события mint/upgrade из TON-листенера
 STREAM_NFT_LISTINGS = "nft_listings"   # события листингов из маркетплейс-листенера
+STREAM_NFT_SALES = "nft_sales"         # события продаж (TonAPI-sync) -> уведомление «GIFT SOLD!»
 
 
 def floor_key(collection_id: str, model: str | None = None) -> str:
