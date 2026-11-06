@@ -443,10 +443,12 @@ class NotificationDispatcher:
             model_floor = await self._model_floor(collection_id, attributes.get("model"))
 
         target_users = set()
+        no_contact = 0
         for f in filters:
             if not has_contact and (
                 (kind == "listing" and f.require_owner) or (kind == "upgrade" and f.require_owner_upgrade)
             ):
+                no_contact += 1
                 continue  # фильтр просит слать только с контактом владельца
             if not _in_range(number, f.number_min, f.number_max):
                 continue
@@ -469,6 +471,13 @@ class NotificationDispatcher:
                 target_users.add(f.user_id)
 
         if not target_users:
+            if no_contact:
+                # видно в логах, почему алерта нет: у события нет контакта владельца, а фильтр его требует
+                self.stats["skipped_no_contact"] = self.stats.get("skipped_no_contact", 0) + 1
+                logger.info(
+                    f"[dispatcher] {kind}: {no_contact} фильтр(ов) пропущено — нет контакта владельца "
+                    f"(всего пропусков {self.stats['skipped_no_contact']})"
+                )
             return
 
         # Отправляем параллельно
