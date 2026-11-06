@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     dispatch_dedup_ttl: int = Field(default=3600, ge=1)  # дедупликация событий, с
     # флоры MRKT/Portals (вход через их мини-приложения вашим Telegram-аккаунтом; без обхода защиты)
     market_floors_enabled: bool = Field(default=False)
+    # новые листинги MRKT/Portals (приоритетный источник алертов «ЛИСТИНГ»)
+    market_listings_enabled: bool = Field(default=False)
+    market_listings_interval: float = Field(default=2.0, ge=0.5)
+    market_listings_pages: int = Field(default=3, ge=1)  # страниц MRKT (по 20) за опрос
+    market_listings_max_new: int = Field(default=60, ge=1)
+    # события из блокчейна (скан TonAPI): листинги/апгрейды без контакта владельца дублируют маркеты и шумят
+    onchain_listings_enabled: bool = Field(default=False)
+    onchain_upgrades_enabled: bool = Field(default=False)
+    onchain_sales_enabled: bool = Field(default=True)  # других источников продаж пока нет
     market_floors_sources: str = Field(default="mrkt,portals")
     market_floors_interval: float = Field(default=1.5, ge=0.5)  # пауза между запросами, с
     market_floors_ttl: int = Field(default=1800, ge=60)
