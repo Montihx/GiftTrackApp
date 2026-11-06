@@ -16,6 +16,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -119,6 +120,11 @@ class User(Base):
     sub_expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     sub_plan: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'free'"))
     is_banned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("FALSE"))
+    # пауза уведомлений (/pause, /resume) и тихие часы (/quiet) по часовому поясу пользователя (/tz, часы от UTC)
+    is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("FALSE"))
+    quiet_start: Mapped[int | None] = mapped_column(SmallInteger)
+    quiet_end: Mapped[int | None] = mapped_column(SmallInteger)
+    tz_offset: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=3, server_default=text("3"))
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

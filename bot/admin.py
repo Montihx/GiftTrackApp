@@ -7,7 +7,7 @@ import asyncio
 import datetime as dt
 
 from aiogram import Router
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy import func, select
 
@@ -18,6 +18,16 @@ from db.models import Collection, Filter, User
 from services.payments import activate_subscription
 
 admin_router = Router()
+
+
+class IsAdmin(BaseFilter):
+    """Фильтр роутера: не админ — сообщение идёт дальше к обычным командам (например, /stats пользователя)."""
+
+    async def __call__(self, msg: Message) -> bool:
+        return bool(msg.from_user) and get_settings().is_admin(msg.from_user.id)
+
+
+admin_router.message.filter(IsAdmin())
 
 
 def _is_admin(msg: Message) -> bool:
