@@ -79,3 +79,14 @@ class TonApiClient:
                 logger.info(f"tonapi: {address[:8]}… больше {limit} items — floor не считаю")
                 return None
         return floor_from_items(items)
+
+    async def fetch_item_sale_price(self, item_address: str) -> Decimal | None:
+        """Цена активного листинга NFT (GET /v2/nfts/{address}) или None."""
+        if not self.enabled:
+            return None
+        try:
+            item = await self._get(f"/v2/nfts/{item_address}", context=f"item[{item_address[:8]}…]")
+        except Exception as exc:  # noqa: BLE001 — витрина не падает из-за внешнего API
+            logger.debug(f"tonapi item {item_address[:8]}…: {exc!r}")
+            return None
+        return parse_ton_price((item or {}).get("sale"))
