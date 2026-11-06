@@ -158,6 +158,8 @@ class OwnerLookupWorker:
             owner = {}
         self.stats["lookups"] += 1
         self.stats["found" if (owner.get("username") or owner.get("tg_user_id")) else "hidden"] += 1
+        if self.stats["lookups"] % 50 == 0:  # доля найденных контактов видна в логах
+            logger.info(f"[owner_lookup] статистика: {self.stats}")
         await self.redis.set(key, orjson.dumps(owner), ex=HIT_TTL if owner else MISS_TTL)
         return owner
 
