@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.twa import get_session
 from core.config import get_settings
-from services.payments import activate_subscription
+from services.payments import activate_subscription, parse_invoice_payload
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
@@ -31,10 +31,15 @@ async def payments_webhook(
     status = payload.get("status")
     invoice_payload = payload.get("payload") or ""
 
-    if status != "paid" or not invoice_payload.isdigit():
+    parsed = parse_invoice_payload(
+        invoice_payload,
+        allowed_days={p["days"] for p in settings.subscription_plans},
+        default_days=settings.subscription_days,
+    )
+    if status != "paid" or parsed is None:
         return {"ok": True, "ignored": True}
 
-    tg_id = int(invoice_payload)
-    await activate_subscription(session, tg_id, settings.subscription_days)
+    tg_id, days = parsed
+    await activate_subscription(session, tg_id, days)
     logger.info(f"Webhook: подписка оплачена пользователем {tg_id}")
     return {"ok": True}
