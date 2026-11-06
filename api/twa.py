@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_current_user_init_data
 from core.redis_client import cache_get_json, floor_key
 from db.engine import session_scope
-from db.models import Collection, Filter
+from db.models import Attribute, Collection, Filter
 
 router = APIRouter(prefix="/api", tags=["twa"])
 async def get_session() -> AsyncIterator[AsyncSession]:
@@ -60,6 +60,13 @@ def _parse_user_id(init_data: dict[str, Any]) -> int:
         raise HTTPException(status_code=401, detail="Bad user payload") from None
 
 
+def _username(init_data: dict[str, Any]) -> str | None:
+    try:
+        return orjson.loads(init_data.get("user", "{}")).get("username")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @router.get("/filters")
 async def get_filters(
     session: AsyncSession = Depends(get_session),
@@ -69,10 +76,20 @@ async def get_filters(
     user_id = _parse_user_id(init_data)
     stmt = select(Filter).where(Filter.user_id == user_id)
     filters = (await session.execute(stmt)).scalars().all()
+    # Названия атрибутов — для карточек «Мои фильтры» (тяжёлый список коллекций с атрибутами больше не отдаётся)
+    attr_ids = {a for f in filters for a in (f.model_id, f.background_id, f.symbol_id, f.pattern_id) if a}
+    names: dict[Any, str] = {}
+    if attr_ids:
+        rows = await session.execute(select(Attribute.id, Attribute.value).where(Attribute.id.in_(attr_ids)))
+        names = {aid: val for aid, val in rows.all()}
     return {
         "filters": [
             {
                 "id": str(f.id),
+                "model_name": names.get(f.model_id),
+                "background_name": names.get(f.background_id),
+                "symbol_name": names.get(f.symbol_id),
+                "pattern_name": names.get(f.pattern_id),
                 "collection_id": str(f.collection_id) if f.collection_id else None,
                 "model_id": str(f.model_id) if f.model_id else None,
                 "background_id": str(f.background_id) if f.background_id else None,
@@ -96,6 +113,11 @@ async def create_filter(
 ) -> dict[str, Any]:
     """Создать фильтр для текущего пользователя."""
     user_id = _parse_user_id(init_data)
+    # Пользователь мог открыть мини-приложение, не нажимая /start в боте: без строки в users фильтр
+    # падал бы на внешнем ключе (500). Создаём её при необходимости.
+    from services.showcase import ensure_user
+
+    await ensure_user(session, user_id, _username(init_data))
     new_filter = Filter(
         user_id=user_id,
         collection_id=uuid.UUID(payload.collection_id) if payload.collection_id else None,

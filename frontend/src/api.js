@@ -28,6 +28,21 @@ export async function apiRequest(method, path, body) {
 
 export const apiGet = (path) => apiRequest("GET", path);
 
+// Кэш GET-ответов на время сессии: повторное открытие экрана показывает данные мгновенно, а свежие
+// подтягиваются в фоне (stale-while-revalidate). cached — что уже есть (или null), promise — свежий ответ.
+const _cache = new Map();
+export function cachedGet(path, ttlMs = 60000) {
+  const hit = _cache.get(path);
+  const fresh = hit && Date.now() - hit.t < ttlMs;
+  const promise = fresh
+    ? Promise.resolve(hit.data)
+    : apiGet(path).then((data) => {
+        _cache.set(path, { t: Date.now(), data });
+        return data;
+      });
+  return { cached: hit ? hit.data : null, promise };
+}
+
 // Цена в TON; null -> «—» (источник цен не подключен или листингов нет)
 export function fmtTon(v) {
   if (v == null) return "—";

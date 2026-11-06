@@ -1,6 +1,6 @@
 // App.jsx — фильтры уведомлений: список «Мои фильтры» и форма «Создать»
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { API, apiGet, apiRequest, fmtTon } from "./api";
+import { API, apiGet, apiRequest, cachedGet, fmtTon } from "./api";
 import { CollectionIcon } from "./ui";
 
 const EMPTY_FORM = {
@@ -13,7 +13,7 @@ const EMPTY_FORM = {
 };
 
 // Выпадающий список с поиском по буквам (без сторонних UI-библиотек)
-function SearchSelect({ label, placeholder, anyLabel, options, value, onChange, renderIcon }) {
+function SearchSelect({ label, placeholder, anyLabel, options, value, onChange, renderIcon, loading = false }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const boxRef = useRef(null);
@@ -66,7 +66,9 @@ function SearchSelect({ label, placeholder, anyLabel, options, value, onChange, 
                 {o.hint ? <span className="ss-hint">{o.hint}</span> : null}
               </button>
             ))}
-            {visible.length === 0 && <div className="ss-empty">Ничего не найдено</div>}
+            {visible.length === 0 && (
+              <div className="ss-empty">{loading && options.length === 0 ? "Загрузка…" : "Ничего не найдено"}</div>
+            )}
           </div>
         </div>
       )}
@@ -91,14 +93,27 @@ export default function Filters() {
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
 
+  const [loadingList, setLoadingList] = useState(true);
+  const [attrData, setAttrData] = useState({}); // collection_id -> {models, backgrounds, symbols}
+  const [attrLoading, setAttrLoading] = useState(false);
+
+  // seed-коллекции без адреса контракта в форме фильтров не нужны (отслеживать нечего)
+  const trackable = (d) => (d.collections || []).filter((c) => c.trackable !== false);
+
   const load = useCallback(async () => {
+    const { cached, promise } = cachedGet("/collections", 20000);
+    if (cached) {
+      setCollections(trackable(cached)); // сразу показываем то, что уже загружали
+      setLoadingList(false);
+    }
     try {
-      const [cData, fData] = await Promise.all([apiGet("/collections"), apiGet("/filters")]);
-      // seed-коллекции без адреса контракта в форме фильтров не нужны (отслеживать нечего)
-      setCollections((cData.collections || []).filter((c) => c.trackable !== false));
+      const [cData, fData] = await Promise.all([promise, apiGet("/filters")]);
+      setCollections(trackable(cData));
       setFilters(fData.filters || []);
     } catch (e) {
       setMsg(e.status === 401 ? "Откройте приложение внутри Telegram" : "Ошибка загрузки данных");
+    } finally {
+      setLoadingList(false);
     }
   }, []);
 
@@ -107,6 +122,23 @@ export default function Filters() {
   }, [load]);
 
   const selectedColl = collections.find((c) => c.id === form.collection_id);
+
+  // Модели/фоны/символы грузим только для выбранного подарка (у коллекций их сотни — общий список их не содержит)
+  useEffect(() => {
+    const id = form.collection_id;
+    if (!id) return undefined;
+    let alive = true;
+    const { cached, promise } = cachedGet(`/collections/${id}/attributes`, 300000);
+    if (cached) setAttrData((m) => ({ ...m, [id]: cached.attributes }));
+    setAttrLoading(!cached);
+    promise
+      .then((d) => alive && setAttrData((m) => ({ ...m, [id]: d.attributes })))
+      .catch(() => alive && setMsg("Не удалось загрузить модели и фоны"))
+      .finally(() => alive && setAttrLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, [form.collection_id]);
 
   useEffect(() => {
     if (!form.collection_id) {
@@ -142,7 +174,7 @@ export default function Filters() {
       })),
     [collections],
   );
-  const attrs = selectedColl?.attributes || {};
+  const attrs = attrData[form.collection_id] || {};
   const modelOpts = useMemo(() => attrOptions(attrs.models), [attrs.models]);
   const bgOpts = useMemo(() => attrOptions(attrs.backgrounds), [attrs.backgrounds]);
   const symbolOpts = useMemo(() => attrOptions(attrs.symbols), [attrs.symbols]);
@@ -191,17 +223,12 @@ export default function Filters() {
     }
   };
 
-  const attrName = (coll, type, id) => {
-    const item = (coll?.attributes?.[type] || []).find((a) => a.id === id);
-    return item ? item.value : "—";
-  };
-
-  const describe = (f, coll) => {
+  const describe = (f) => {
     const parts = [];
-    if (f.model_id) parts.push(`Модель: ${attrName(coll, "models", f.model_id)}`);
-    if (f.background_id) parts.push(`Фон: ${attrName(coll, "backgrounds", f.background_id)}`);
-    if (f.symbol_id) parts.push(`Символ: ${attrName(coll, "symbols", f.symbol_id)}`);
-    if (f.pattern_id) parts.push(`Узор: ${attrName(coll, "patterns", f.pattern_id)}`);
+    if (f.model_id) parts.push(`Модель: ${f.model_name || "—"}`);
+    if (f.background_id) parts.push(`Фон: ${f.background_name || "—"}`);
+    if (f.symbol_id) parts.push(`Символ: ${f.symbol_name || "—"}`);
+    if (f.pattern_id) parts.push(`Узор: ${f.pattern_name || "—"}`);
     if (f.floor_min != null || f.floor_max != null) {
       parts.push(`Флор модели ${f.floor_min != null ? `от ${f.floor_min}` : ""} ${f.floor_max != null ? `до ${f.floor_max}` : ""} TON`.replace(/\s+/g, " "));
     }
@@ -239,7 +266,7 @@ export default function Filters() {
                 <CollectionIcon url={coll?.icon_url} name={coll?.name || "★"} size={40} />
                 <div className="fcard-main">
                   <div className="card-title">{coll ? coll.name : "Любой подарок"}</div>
-                  <div className="card-sub">{describe(f, coll)}</div>
+                  <div className="card-sub">{describe(f)}</div>
                 </div>
                 <button className="del" onClick={() => remove(f.id)} aria-label="Удалить фильтр">Удалить</button>
               </div>
@@ -255,6 +282,7 @@ export default function Filters() {
             placeholder="Поиск подарка…"
             anyLabel="Любой подарок"
             options={giftOptions}
+            loading={loadingList}
             value={form.collection_id}
             onChange={pickCollection}
             renderIcon={(o) => <CollectionIcon url={o.icon_url} name={o.label} size={24} />}
@@ -268,6 +296,7 @@ export default function Filters() {
                 placeholder="Поиск модели…"
                 anyLabel="Любая модель"
                 options={modelOpts}
+                loading={attrLoading}
                 value={form.model}
                 onChange={(v) => setField("model", v)}
               />
@@ -276,6 +305,7 @@ export default function Filters() {
                 placeholder="Поиск фона…"
                 anyLabel="Любой фон"
                 options={bgOpts}
+                loading={attrLoading}
                 value={form.background}
                 onChange={(v) => setField("background", v)}
               />
@@ -284,10 +314,12 @@ export default function Filters() {
                 placeholder="Поиск символа…"
                 anyLabel="Любой символ"
                 options={symbolOpts}
+                loading={attrLoading}
                 value={form.symbol}
                 onChange={(v) => setField("symbol", v)}
               />
-              {modelOpts.length === 0 && (
+              {attrLoading && <div className="hint">Загружаю модели, фоны и символы…</div>}
+              {!attrLoading && modelOpts.length === 0 && (
                 <div className="hint">Модели, фоны и символы появятся после первой синхронизации коллекции.</div>
               )}
             </>

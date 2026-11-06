@@ -1,6 +1,6 @@
 // Home.jsx — главная: сетка карточек коллекций, поиск, сортировка
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiGet, fmtTon } from "./api";
+import { cachedGet, fmtTon } from "./api";
 import { navigate } from "./router";
 import { ChangeBadge, CollectionIcon, EmptyState, Skeleton } from "./ui";
 
@@ -53,10 +53,13 @@ export default function Home() {
 
   const load = useCallback(() => {
     setError(false);
-    setData(null);
-    apiGet("/collections")
+    const { cached, promise } = cachedGet("/collections", 20000);
+    setData(cached ? cached.collections || [] : null);
+    promise
       .then((d) => setData(d.collections || []))
-      .catch(() => setError(true));
+      .catch(() => {
+        if (!cached) setError(true);
+      });
   }, []);
 
   useEffect(() => {

@@ -105,3 +105,73 @@ async def test_create_filter_endpoint(session):
     finally:
         app.dependency_overrides.clear()
 
+
+
+@pytest.mark.asyncio
+async def test_create_filter_creates_missing_user_and_list_returns_attribute_names(session):
+    """Без /start пользователя нет в users: фильтр должен создавать его (иначе FK -> 500).
+    GET /filters отдаёт названия атрибутов для карточек (список коллекций атрибутов больше не содержит)."""
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import select
+
+    import api.twa as twa_module
+    from api.main import app
+    from db.models import Attribute, Collection, User
+
+    coll = Collection(name="Names Coll", contract_address="EQnames_coll", source="seed")
+    session.add(coll)
+    await session.flush()
+    model = Attribute(collection_id=coll.id, type="model", value="Amalgam")
+    sym = Attribute(collection_id=coll.id, type="symbol", value="Wolf Rage")
+    session.add_all([model, sym])
+    await session.commit()
+
+    async def fake_dep():
+        return {"user": '{"id": 4242, "username": "newbie"}'}
+
+    async def fake_session():
+        yield session
+
+    app.dependency_overrides[twa_module.get_current_user_init_data] = fake_dep
+    app.dependency_overrides[twa_module.get_session] = fake_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/filters", json={
+                "collection_id": str(coll.id), "model_id": str(model.id), "symbol_id": str(sym.id)})
+            assert resp.status_code == 200
+            user = (await session.execute(select(User).where(User.tg_id == 4242))).scalar_one()
+            assert user.username == "newbie"
+            data = (await client.get("/api/filters")).json()["filters"]
+            assert data[0]["model_name"] == "Amalgam" and data[0]["symbol_name"] == "Wolf Rage"
+            assert data[0]["background_name"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_collection_attributes_endpoint(session):
+    from httpx import ASGITransport, AsyncClient
+
+    import api.showcase as showcase_module
+    from api.main import app
+    from db.models import Attribute, Collection
+
+    coll = Collection(name="Attr Coll", contract_address="EQattr_coll", source="seed", items_count=10)
+    session.add(coll)
+    await session.flush()
+    session.add(Attribute(collection_id=coll.id, type="model", value="Zed", items_count=1))
+    await session.commit()
+
+    async def fake_session():
+        yield session
+
+    app.dependency_overrides[showcase_module.get_session] = fake_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            data = (await client.get(f"/api/collections/{coll.id}/attributes")).json()
+            assert data["attributes"]["models"][0]["value"] == "Zed" and data["attributes"]["models"][0]["rarity"] == 10.0
+            light = (await client.get("/api/collections")).json()["collections"]
+            assert light[0]["attributes"]["models"] == [] and light[0]["rarity_summary"]["models"] == 1
+            assert (await client.get("/api/collections/00000000-0000-0000-0000-000000000000/attributes")).status_code == 404
+    finally:
+        app.dependency_overrides.clear()

@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_current_user_init_data
 from api.twa import _parse_user_id, get_session
 from core.config import get_settings
-from core.redis_client import cache_get_json, floor_key
+from core.redis_client import floor_key
 from db.models import Collection, User
 from services import showcase as sc
 from services.tonapi import TonApiClient
@@ -37,17 +37,24 @@ def get_tonapi() -> TonApiClient:
 
 
 async def _redis_floors(ids: list[str]) -> dict[str, float]:
-    """Свежие floors из Redis; при недоступности Redis витрина работает на данных БД."""
+    """Свежие floors из Redis одним MGET; при недоступности Redis витрина работает на данных БД."""
+    if not ids:
+        return {}
     try:
+        import orjson
+
         from core.redis_client import create_redis
 
         redis = create_redis()
         try:
+            values = await redis.mget([floor_key(cid) for cid in ids])
             out: dict[str, float] = {}
-            for cid in ids:
-                val = await cache_get_json(redis, floor_key(cid))
-                if val is not None:
-                    out[cid] = float(val)
+            for cid, raw in zip(ids, values, strict=True):
+                if raw is not None:
+                    try:
+                        out[cid] = float(orjson.loads(raw))
+                    except (orjson.JSONDecodeError, TypeError, ValueError):
+                        continue
             return out
         finally:
             await redis.aclose()
@@ -75,11 +82,33 @@ def _username(init_data: dict[str, Any]) -> str | None:
 # ---------------------------------------------------------------------------
 # Коллекции
 # ---------------------------------------------------------------------------
+_LIST_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
+
+
 @router.get("/collections")
 async def get_collections(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Лёгкий список коллекций; ответ кэшируется на SHOWCASE_CACHE_TTL секунд (общий для всех пользователей)."""
+    import time
+
+    ttl = get_settings().showcase_cache_ttl
+    now = time.monotonic()
+    if ttl > 0 and _LIST_CACHE["data"] is not None and now - _LIST_CACHE["ts"] < ttl:
+        return _LIST_CACHE["data"]
     ids = [str(i) for i in (await session.execute(select(Collection.id))).scalars().all()]
     overrides = await _redis_floors(ids)
-    return {"collections": await sc.list_collections(session, overrides)}
+    data = {"collections": await sc.list_collections(session, overrides)}
+    if ttl > 0:
+        _LIST_CACHE.update(ts=now, data=data)
+    return data
+
+
+@router.get("/collections/{collection_id}/attributes")
+async def get_collection_attributes(collection_id: str, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Модели, фоны, символы и узоры одной коллекции (форма фильтров)."""
+    cid = await _require_collection(session, collection_id)
+    data = await sc.list_collection_attributes(session, cid)
+    assert data is not None
+    return data
 
 
 @router.get("/collections/{collection_id}")

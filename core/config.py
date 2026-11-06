@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     # Реальное время: SSE-поток всех переводов NFT в TON (GET /v2/sse/accounts/transactions,
     # op 0x5fcc3d14). Перевод нашего подарка -> GET /v2/nfts/{addr} через tonapi_stream_delay с
     # -> «ЛИСТИНГ» / «GIFT SOLD!» за секунды, без полного скана. Квоту почти не тратит.
+    # Кэш лёгкого списка коллекций в API (общий для всех пользователей), секунды; 0 — выкл
+    showcase_cache_ttl: float = Field(default=10.0, ge=0)
     tonapi_stream_enabled: bool = Field(default=True)
     tonapi_stream_delay: float = Field(default=2.0, ge=0)
     tonapi_stream_recheck: float = Field(default=8.0, ge=0)  # повтор, если индексатор не успел; 0 — выкл

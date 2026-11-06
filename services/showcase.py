@@ -68,20 +68,28 @@ async def floor_changes_24h(
     if not ids:
         return out
     cutoff = (now or utcnow()) - dt.timedelta(hours=24)
+    # Самый поздний снапшот старше 24ч — одна строка на коллекцию (раньше выгружались ВСЕ снимки за 30 дней,
+    # а их пишется много: по одному на каждое изменение флора)
+    window = (
+        select(FloorSnapshot.collection_id.label("cid"), func.max(FloorSnapshot.ts).label("ts"))
+        .where(
+            FloorSnapshot.collection_id.in_(ids),
+            FloorSnapshot.ts <= cutoff,
+            FloorSnapshot.ts >= cutoff - dt.timedelta(days=30),
+        )
+        .group_by(FloorSnapshot.collection_id)
+        .subquery()
+    )
     rows = (
         await session.execute(
-            select(FloorSnapshot.collection_id, FloorSnapshot.price)
-            .where(
-                FloorSnapshot.collection_id.in_(ids),
-                FloorSnapshot.ts <= cutoff,
-                FloorSnapshot.ts >= cutoff - dt.timedelta(days=30),
+            select(FloorSnapshot.collection_id, FloorSnapshot.price).join(
+                window, (FloorSnapshot.collection_id == window.c.cid) & (FloorSnapshot.ts == window.c.ts)
             )
-            .order_by(FloorSnapshot.collection_id, FloorSnapshot.ts.desc())
         )
     ).all()
     baseline: dict[uuid.UUID, Decimal] = {}
     for cid, price in rows:
-        baseline.setdefault(cid, price)  # первая строка группы = самый поздний снапшот до cutoff
+        baseline.setdefault(cid, price)
     for cid in ids:
         base = baseline.get(cid)
         if base is None or Decimal(str(base)) == 0:
@@ -131,28 +139,83 @@ def _collection_meta(
     }
 
 
+async def _rarity_summaries(session: AsyncSession) -> dict[uuid.UUID, dict[str, Any]]:
+    """rarity_summary по всем коллекциям двумя агрегатными запросами (без выгрузки всех атрибутов)."""
+    counts: dict[uuid.UUID, dict[str, int]] = {}
+    rows = await session.execute(
+        select(Attribute.collection_id, Attribute.type, func.count()).group_by(Attribute.collection_id, Attribute.type)
+    )
+    for cid, typ, n in rows.all():
+        counts.setdefault(cid, {})[typ] = n
+    ranked = (
+        select(
+            Attribute.collection_id.label("cid"), Attribute.type.label("typ"), Attribute.value.label("val"),
+            Attribute.items_count.label("cnt"),
+            func.row_number().over(
+                partition_by=Attribute.collection_id, order_by=(Attribute.items_count.asc(), Attribute.value.asc())
+            ).label("rn"),
+        ).where(Attribute.items_count > 0).subquery()
+    )
+    rarest: dict[uuid.UUID, tuple[str, str, int]] = {
+        cid: (typ, val, cnt)
+        for cid, typ, val, cnt in (await session.execute(
+            select(ranked.c.cid, ranked.c.typ, ranked.c.val, ranked.c.cnt).where(ranked.c.rn == 1)
+        )).all()
+    }
+    return {"counts": counts, "rarest": rarest}  # type: ignore[dict-item]
+
+
+def _summary_for(coll: Collection, agg: dict[str, Any]) -> dict[str, Any]:
+    c = agg["counts"].get(coll.id, {})
+    out: dict[str, Any] = {ATTR_PLURAL[t]: c.get(t, 0) for t in ATTR_TYPES}
+    rarest = agg["rarest"].get(coll.id)
+    r = rarity_pct(rarest[2], coll.items_count) if rarest else None
+    out["rarest"] = {"type": rarest[0], "value": rarest[1], "rarity": r} if rarest and r is not None else None
+    return out
+
+
 async def list_collections(
     session: AsyncSession, floor_overrides: dict[str, float] | None = None
 ) -> list[dict[str, Any]]:
-    """Все коллекции (в т.ч. seed без адреса) + атрибуты (для формы фильтров) + 24h change."""
+    """Лёгкий список коллекций (в т.ч. seed без адреса) + 24h change + сводка редкости.
+
+    Атрибуты (модели/фоны/символы) здесь НЕ отдаются: у коллекции их сотни, а коллекций больше ста —
+    раньше ответ был в мегабайты и считался секундами. Для формы фильтров они подгружаются по одной
+    выбранной коллекции: list_collection_attributes. Ключ "attributes" оставлен пустым для старых клиентов.
+    """
     floor_overrides = floor_overrides or {}
     colls = (await session.execute(select(Collection).order_by(Collection.name))).scalars().all()
-    attrs_by: dict[uuid.UUID, list[Attribute]] = {}
-    for a in (await session.execute(select(Attribute))).scalars().all():
-        attrs_by.setdefault(a.collection_id, []).append(a)
-
+    agg = await _rarity_summaries(session)
     floors = {c.id: floor_overrides.get(str(c.id), c.floor_price) for c in colls}
     changes = await floor_changes_24h(session, floors)
 
     result = []
     for c in colls:
-        attrs = attrs_by.get(c.id, [])
-        item = _collection_meta(c, floors[c.id], changes[c.id], attrs)
-        item["attributes"] = {
-            ATTR_PLURAL[t]: [_attr_dict(a, c.items_count) for a in attrs if a.type == t] for t in ATTR_TYPES
+        item = {
+            "id": str(c.id), "name": c.name, "icon_url": c.icon_url,
+            "floor_price": _f(floors[c.id]), "floor_24h_change": changes[c.id],
+            "items_count": c.items_count, "trackable": is_trackable(c.contract_address), "source": c.source,
+            "rarity_summary": _summary_for(c, agg),
+            "attributes": {ATTR_PLURAL[t]: [] for t in ATTR_TYPES},
         }
         result.append(item)
     return result
+
+
+async def list_collection_attributes(session: AsyncSession, collection_id: uuid.UUID) -> dict[str, Any] | None:
+    """Все модели/фоны/символы/узоры одной коллекции — для формы фильтров."""
+    coll = await session.get(Collection, collection_id)
+    if coll is None:
+        return None
+    attrs = (await session.execute(
+        select(Attribute).where(Attribute.collection_id == collection_id).order_by(Attribute.value)
+    )).scalars().all()
+    return {
+        "collection_id": str(collection_id),
+        "attributes": {
+            ATTR_PLURAL[t]: [_attr_dict(a, coll.items_count) for a in attrs if a.type == t] for t in ATTR_TYPES
+        },
+    }
 
 
 async def get_collection_detail(
