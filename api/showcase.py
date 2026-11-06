@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_current_user_init_data
 from api.twa import _parse_user_id, get_session
 from core.config import get_settings
+from core.config import get_settings
 from core.redis_client import floor_key
 from db.models import Collection, User
 from services import showcase as sc
@@ -131,13 +132,12 @@ def _apply_tg(item: dict[str, Any], tg: dict[str, Any] | None) -> None:
     tg = tg or {}
     item["issued_count"] = tg.get("issued_count")
     item["tg_listed"] = tg.get("tg_listed")
-    item["tg_floor_stars"] = tg.get("tg_floor_stars")
-    item["tg_floor_price"] = tg.get("tg_floor_price")
-    prices = [p for p in (item.get("floor_price"), tg.get("tg_floor_price")) if p]
-    item["best_floor"] = min(prices) if prices else None
-    item["best_floor_source"] = (
-        None if not prices else ("telegram" if tg.get("tg_floor_price") == min(prices) else "onchain")
-    )
+    show = get_settings().tg_floor_show
+    item["tg_floor_stars"] = tg.get("tg_floor_stars") if show else None
+    item["tg_floor_price"] = tg.get("tg_floor_price") if show else None
+    # основной флор — всегда ончейн; телеграмный только справочно (TG_FLOOR_SHOW=true)
+    item["best_floor"] = item.get("floor_price") or None
+    item["best_floor_source"] = "onchain" if item["best_floor"] else None
 
 
 _LIST_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
