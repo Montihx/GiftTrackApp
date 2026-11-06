@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     coin_label: str = Field(default="GRAM")
     # показывать флор маркета Telegram (отдельной строкой на странице коллекции); на карточках всегда ончейн-флор
     tg_floor_show: bool = Field(default=False)
+    # шина событий диспетчера: повторы и забор зависших сообщений
+    dispatch_max_attempts: int = Field(default=5, ge=1)
+    dispatch_retry_base: float = Field(default=0.5, ge=0)  # пауза перед повтором: base * 2**попытка, с
+    dispatch_claim_idle_ms: int = Field(default=60_000, ge=1000)  # pending дольше — забираем у упавшего потребителя
+    dispatch_dedup_ttl: int = Field(default=3600, ge=1)  # дедупликация событий, с
     # флоры MRKT/Portals (вход через их мини-приложения вашим Telegram-аккаунтом; без обхода защиты)
     market_floors_enabled: bool = Field(default=False)
     market_floors_sources: str = Field(default="mrkt,portals")
