@@ -1,110 +1,131 @@
 {
-  "_comment": "Seed-каталог коллекций Telegram Gifts. contract_address=null -> запись создаётся с плейсхолдером tg_gift:<slug> (floors не считаются, показывается «—»). Чтобы включить цены, впишите проверенный адрес коллекции (EQ…) — upsert сам заменит плейсхолдер. Адреса НЕ угадывайте: сверяйте минимум по двум источникам.",
+  "_comment": "Seed-каталог коллекций Telegram Gifts. Адреса сверены on-chain через TonAPI (2026-11-06): коллекция в whitelist TonAPI, approved_by=getgems, метаданные с https://nft.fragment.com/collection/<slug>.json; Plush Pepe дополнительно совпадает с Tonviewer/Tonscan. contract_address=null -> плейсхолдер tg_gift:<slug> (floor «—»). Адреса НЕ угадывайте: сверяйте минимум по двум источникам.",
   "collections": [
     {
       "name": "Plush Pepe",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQBG-g6ahkAUGWpefWbx-D_9sQ8oWbvy6puuq78U2c4NUDFS",
+      "icon_url": "https://nft.fragment.com/collection/plushpepe.webp",
+      "fragment_slug": "plushpepe"
     },
     {
       "name": "Durov's Cap",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQD9ikZq6xPgKjzmdBG0G0S80RvUJjbwgHrPZXDKc_wsE84w",
+      "icon_url": "https://nft.fragment.com/collection/durovscap.webp",
+      "fragment_slug": "durovscap"
     },
     {
       "name": "Precious Peach",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQA4i58iuS9DUYRtUZ97sZo5mnkbiYUBpWXQOe3dEUCcP1W8",
+      "icon_url": "https://nft.fragment.com/collection/preciouspeach.webp",
+      "fragment_slug": "preciouspeach"
     },
     {
       "name": "Heart Locket",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQC4XEulxb05Le5gF6esMtDWT5XZ6tlzlMBQGNsqffxpdC5U",
+      "icon_url": "https://nft.fragment.com/collection/heartlocket.webp",
+      "fragment_slug": "heartlocket"
     },
     {
       "name": "Diamond Ring",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQCWh1lPltyTwCWxCXm4umL5tPZoXR8kTIcT-pd0JqoadLHo",
+      "icon_url": "https://nft.fragment.com/collection/diamondring.webp",
+      "fragment_slug": "diamondring"
     },
     {
       "name": "Crystal Ball",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQAtgbhSHOqTxjuRLLOAab6T66FPcQWTNd_DT3VgCG1-tHJw",
+      "icon_url": "https://nft.fragment.com/collection/crystalball.webp",
+      "fragment_slug": "crystalball"
     },
     {
       "name": "Perfume Bottle",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQDJsN9OJBhKGZoWZWtkEpzkCfIu16Z9UzTWbYjeLpuHdT5f",
+      "icon_url": "https://nft.fragment.com/collection/perfumebottle.webp",
+      "fragment_slug": "perfumebottle"
     },
     {
       "name": "Homemade Cake",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQCefrjhCD2_7HRIr2lmwt9ZaqeG_tdseBvADC66833kBS3y",
+      "icon_url": "https://nft.fragment.com/collection/homemadecake.webp",
+      "fragment_slug": "homemadecake"
     },
     {
       "name": "Signet Ring",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQCrGA9slCoksgD-NyRDjtHySKN0Ts8k6hdueJkUkZZdD4_K",
+      "icon_url": "https://nft.fragment.com/collection/signetring.webp",
+      "fragment_slug": "signetring"
     },
     {
       "name": "Eternal Rose",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQDumy3bnZYzV4bSWMSSZkmXqx50XuH5d9RlX_yEi2FNlivk",
+      "icon_url": "https://nft.fragment.com/collection/eternalrose.webp",
+      "fragment_slug": "eternalrose"
     },
     {
       "name": "Vintage Cigar",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQACcQpR2fmdeENWdE2YGQWHVxSTyA8Zq4_k7rk_IaxCRXNe",
+      "icon_url": "https://nft.fragment.com/collection/vintagecigar.webp",
+      "fragment_slug": "vintagecigar"
     },
     {
       "name": "Santa Hat",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQAaTIR7oJyowDiumYLVN0oe61kGE3I6EPEn7WgHPGuWAeCy",
+      "icon_url": "https://nft.fragment.com/collection/santahat.webp",
+      "fragment_slug": "santahat"
     },
     {
       "name": "Berry Box",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQB4x3sT1DVdODzay3H-4VJIdOooS5-kTgyKcYMZWogPOsiq",
+      "icon_url": "https://nft.fragment.com/collection/berrybox.webp",
+      "fragment_slug": "berrybox"
     },
     {
       "name": "Magic Potion",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQAtFU9GrGfix4UG9DOivN58QxvgBJUaAZ_pdZBZCmbhKo4P",
+      "icon_url": "https://nft.fragment.com/collection/magicpotion.webp",
+      "fragment_slug": "magicpotion"
     },
     {
       "name": "Sharp Tongue",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQBw2tO5UaJ4c_YXt3I8y5KD0k37staZxedV2O5HmryiK0dN",
+      "icon_url": "https://nft.fragment.com/collection/sharptongue.webp",
+      "fragment_slug": "sharptongue"
     },
     {
       "name": "Trapped Heart",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQCyAMkb6bNyNlKPH0tJbubk1VVjASqyq9sZwkJ8AbxMkxxU",
+      "icon_url": "https://nft.fragment.com/collection/trappedheart.webp",
+      "fragment_slug": "trappedheart"
     },
     {
       "name": "Kissed Frog",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQDTro-ogJbS7o-OBD6bt2NysPt7SnGm5zfuRXGB1nE_rbGa",
+      "icon_url": "https://nft.fragment.com/collection/kissedfrog.webp",
+      "fragment_slug": "kissedfrog"
     },
     {
       "name": "Hex Pot",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQB6AtBPOuTtQml8oSA7X8ZqJ5QmcOYYqoz92sQYXGUQrxyB",
+      "icon_url": "https://nft.fragment.com/collection/hexpot.webp",
+      "fragment_slug": "hexpot"
     },
     {
       "name": "Spy Agaric",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQD6mH9bwbn6S3M_tCRWOvqAIW8M34kRwbI01niGLRPeDPsl",
+      "icon_url": "https://nft.fragment.com/collection/spyagaric.webp",
+      "fragment_slug": "spyagaric"
     },
     {
       "name": "Swiss Watch",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQBI07PXew94YQz7GwN72nPNGF6htSTOJkuU4Kx_bjTZv32U",
+      "icon_url": "https://nft.fragment.com/collection/swisswatch.webp",
+      "fragment_slug": "swisswatch"
     },
     {
       "name": "Toy Bear",
-      "contract_address": null,
-      "icon_url": null
+      "contract_address": "EQC1gud6QO8NdJjVrqr7qFBMO0oQsktkvzhmIRoMKo8vxiyL",
+      "icon_url": "https://nft.fragment.com/collection/toybear.webp",
+      "fragment_slug": "toybear"
     }
   ]
 }

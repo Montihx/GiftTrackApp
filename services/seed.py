@@ -7,7 +7,8 @@ Upsert seed-каталога при старте updater (source="seed").
   * entry без contract_address -> плейсхолдер "tg_gift:<slug>" (updater такие пропускает,
     floor остаётся NULL -> витрина показывает «—»);
   * если в JSON позже появился реальный адрес, а в БД лежит seed-плейсхолдер этой же
-    коллекции — плейсхолдер заменяется реальным адресом (backfill).
+    коллекции — плейсхолдер заменяется реальным адресом (backfill), вместе с icon_url;
+  * у существующей записи без иконки icon_url дозаполняется из JSON.
 """
 from __future__ import annotations
 
@@ -71,10 +72,16 @@ async def upsert_seed(session: AsyncSession, path: str | Path) -> dict[str, int]
     for e in load_seed_entries(path):
         existing = (
             await session.execute(
-                select(Collection.id).where(Collection.contract_address == e["contract_address"])
+                select(Collection.id, Collection.icon_url).where(
+                    Collection.contract_address == e["contract_address"]
+                )
             )
-        ).scalar_one_or_none()
+        ).one_or_none()
         if existing is not None:
+            if existing.icon_url is None and e["icon_url"]:  # иконку дозаполняем, остальное не трогаем
+                await session.execute(
+                    update(Collection).where(Collection.id == existing.id).values(icon_url=e["icon_url"])
+                )
             stats["skipped"] += 1
             continue
 
@@ -93,6 +100,7 @@ async def upsert_seed(session: AsyncSession, path: str | Path) -> dict[str, int]
                     update(Collection)
                     .where(Collection.id == placeholder)
                     .values(contract_address=e["contract_address"])
+                    .values(**({"icon_url": e["icon_url"]} if e["icon_url"] else {}))
                 )
                 stats["backfilled"] += 1
                 continue
