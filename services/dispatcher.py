@@ -52,7 +52,7 @@ from typing import Any
 import orjson
 import uuid
 from aiogram import Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -76,6 +76,35 @@ MARKET_TITLES = {
     "getgems": "GetGems", "marketapp": "Marketapp", "fragment": "Fragment", "portals": "Portals",
     "tonnel": "Tonnel", "mrkt": "MRKT", "xgift": "XGift", "tonapi": "TON", "telegram": "Telegram Market",
 }
+
+
+def _coin() -> str:
+    return get_settings().coin_label
+
+
+def _fmt_money(amount: float | None, currency: str | None) -> str:
+    """Сумма с единицей: TON -> название монеты (GRAM), Stars -> ⭐, фиат -> $/код."""
+    if amount is None:
+        return "—"
+    cur = (currency or "TON").upper()
+    if cur == "TON":
+        return f"{_fmt_num(amount)} {_coin()}"
+    if cur == "XTR":
+        return f"⭐ {_fmt_num(amount)}"
+    if cur == "USD":
+        return f"${_fmt_num(amount)}"
+    return f"{_fmt_num(amount)} {cur}"
+
+
+def _valuation_lines(info: dict[str, Any]) -> list[str]:
+    v = (info or {}).get("value") or {}
+    if v.get("value") is None:
+        return []
+    cur = v.get("currency")
+    lines = [f"💎 Оценка Telegram: ≈ <b>{_fmt_money(v['value'], cur)}</b>"]
+    if v.get("last_sale") is not None:
+        lines.append(f"Последняя продажа: {_fmt_money(v['last_sale'], cur)}")
+    return lines
 
 
 def _has_contact(owner: dict[str, Any]) -> bool:
@@ -112,7 +141,7 @@ def format_sale_message(payload: dict[str, Any]) -> str:
     price = float(payload.get("price_ton") or 0)
     usd = payload.get("price_usd")
     usd_part = f" (≈ ${_fmt_num(float(usd))})" if usd else ""
-    lines.append(f"💰 Price: <b>{_fmt_num(price)} TON</b>{usd_part}")
+    lines.append(f"💰 Price: <b>{_fmt_num(price)} {_coin()}</b>{usd_part}")
     lines.append(f"🏪 Sold on {market_title(payload.get('marketplace'))}")
     return "\n".join(lines)
 
@@ -176,8 +205,10 @@ class NotificationDispatcher:
         # Владелец: кошелёк -> резолвер; для только что улучшенного подарка владелец (кошелёк минтера) ничего не
         # даёт — тогда Telegram по slug подарка
         name = metadata.get("name") or f"NFT #{payload.get('index', '?')}"
-        owner = await self._find_owner(owner_ton or "", name)
+        slug = payload.get("slug") or gift_slug(name)
+        owner, info = await self._find_owner(owner_ton or "", slug)
         owner_link = self._owner_link(owner, owner_ton or "")
+        tme = f"https://t.me/nft/{slug}" if slug else None
 
         # Формируем сообщение
         lines = ["🚨 <b>АПГРЕЙД</b>"]
@@ -191,14 +222,17 @@ class NotificationDispatcher:
         if metadata.get("pattern"):
             lines.append(f"Узор: {metadata['pattern']}")
         lines.extend(await self._rarity_and_supply_lines(collection_id, metadata))
+        lines.extend(_valuation_lines(info))
         lines.append("")
         lines.append(f"👤 Владелец: {owner_link}")
         lines.append(f"🔗 <a href='https://getgems.io/nft/{nft_address}'>GetGems</a>")
 
         text = "\n".join(lines)
-        keyboard = self._owner_keyboard(owner)
+        keyboard = self._owner_keyboard(owner, gift_link=tme)
 
-        await self._send_to_subscribers(collection_id, metadata, text, keyboard, has_contact=_has_contact(owner))
+        await self._send_to_subscribers(
+            collection_id, metadata, text, keyboard, has_contact=_has_contact(owner), preview_url=tme
+        )
         self.stats["upgrades"] += 1
 
 
@@ -220,12 +254,14 @@ class NotificationDispatcher:
                 pass
 
         # Продавец: маркет Telegram сразу даёт аккаунт владельца, иначе — резолвим TON-адрес
-        if marketplace == "telegram":
-            owner = {"tg_user_id": payload.get("seller_tg_id"), "username": payload.get("seller_username"),
-                     "name": payload.get("seller_name")}
-        else:
-            owner = await self._find_owner(seller_ton, payload.get("nft_name"))
+        slug = payload.get("slug") or gift_slug(payload.get("nft_name"))
+        if not slug and "t.me/nft/" in str(payload.get("link") or ""):
+            slug = str(payload["link"]).rsplit("/", 1)[-1]
+        known = ({"tg_user_id": payload.get("seller_tg_id"), "username": payload.get("seller_username"),
+                  "name": payload.get("seller_name")} if marketplace == "telegram" else None)
+        owner, info = await self._find_owner(seller_ton, slug, known)
         owner_link = self._owner_link(owner, seller_ton)
+        tme = f"https://t.me/nft/{slug}" if slug else None
 
         # Собираем аналитику из Redis
         floor_coll = await cache_get_json(self.redis, floor_key(str(collection_id) if collection_id else ""))
@@ -249,7 +285,7 @@ class NotificationDispatcher:
         lines.append(f"🎭 <a href='{link}'>{title}</a> на {market_title(marketplace)}")
         stars = payload.get("price_stars")
         if price:
-            lines.append(f"💰 <b>{_fmt_num(float(price))} TON</b>" + (f" · ⭐ {stars:,}".replace(",", " ") if stars else ""))
+            lines.append(f"💰 <b>{_fmt_num(float(price))} {_coin()}</b>" + (f" · ⭐ {stars:,}".replace(",", " ") if stars else ""))
         elif stars:
             lines.append(f"💰 <b>⭐ {stars:,}</b>".replace(",", " "))
         if attributes.get("model"):
@@ -261,6 +297,7 @@ class NotificationDispatcher:
         if attributes.get("pattern"):
             lines.append(f"Узор: {attributes['pattern']}")
         lines.extend(await self._rarity_and_supply_lines(collection_id, attributes))
+        lines.extend(_valuation_lines(info))
         lines.append("")
         lines.append(f"👤 Продавец: {owner_link}")
 
@@ -274,16 +311,16 @@ class NotificationDispatcher:
 
         if floor_coll is not None:
             lines.append("")
-            lines.append(f"Флор гифта: <b>{floor_coll} TON</b>")
+            lines.append(f"Флор гифта: <b>{floor_coll} {_coin()}</b>")
         if floor_model is not None:
-            lines.append(f"Флор модели: <b>{floor_model} TON</b>")
+            lines.append(f"Флор модели: <b>{floor_model} {_coin()}</b>")
         
         if recent_sales:
             prices = [float(s.get("price", 0)) for s in recent_sales if s.get("price")]
             if prices:
                 prices.sort()
                 median = prices[len(prices) // 2]
-                lines.append(f"💎 Ценность: <b>~{median} TON</b> (медиана продаж)")
+                lines.append(f"📊 Медиана продаж модели: <b>~{median} {_coin()}</b>")
 
         if recent_sales:
             lines.append("")
@@ -297,14 +334,16 @@ class NotificationDispatcher:
                     except ValueError:
                         pass
                 lines.append(
-                    f"#{s.get('nft_index', '?')} - {s.get('price', '?')} TON - "
+                    f"#{s.get('nft_index', '?')} - {s.get('price', '?')} {_coin()} - "
                     f"{market_title(s.get('marketplace'))} - {_format_time_ago(sold_dt)}"
                 )
 
         text = "\n".join(lines)
-        keyboard = self._owner_keyboard(owner, gift_link=link)
+        keyboard = self._owner_keyboard(owner, gift_link=tme or link)
 
-        await self._send_to_subscribers(collection_id, attributes, text, keyboard, has_contact=_has_contact(owner))
+        await self._send_to_subscribers(
+            collection_id, attributes, text, keyboard, has_contact=_has_contact(owner), preview_url=tme
+        )
         self.stats["listings"] += 1
 
 
@@ -315,21 +354,26 @@ class NotificationDispatcher:
         await self._send_to_subscribers(collection_id, payload.get("attributes") or {}, text, None)
         self.stats["sales"] += 1
 
-    async def _find_owner(self, owner_ton: str, nft_name: str | None) -> dict[str, Any]:
-        """Контакт владельца: сначала кошелёк (резолвер), затем Telegram по slug подарка (воркер resolver)."""
-        owner: dict[str, Any] = {}
-        if owner_ton:
+    async def _find_owner(
+        self, owner_ton: str, slug: str | None, known: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """(контакт владельца, данные подарка из Telegram: оценка).
+
+        Контакт: известный из события -> кошелёк (резолвер) -> Telegram по slug (воркер resolver). Оценку и
+        владельца по slug отдаёт один запрос воркера, поэтому он нужен и когда контакт уже известен.
+        """
+        owner: dict[str, Any] = dict(known or {})
+        if not _has_contact(owner) and owner_ton:
             try:
-                owner = await self.resolver.resolve(owner_ton) or {}
+                owner = {**owner, **(await self.resolver.resolve(owner_ton) or {})}
             except Exception as exc:  # noqa: BLE001 — резолвер не должен ронять уведомление
                 logger.debug(f"resolver: {exc!r}")
-        if not _has_contact(owner) and self.settings.owner_lookup_enabled:
-            slug = gift_slug(nft_name)
-            if slug:
-                found = await request_owner(self.redis, slug, timeout=self.settings.owner_lookup_timeout)
-                if found:
-                    owner = {**owner, **found}
-        return owner
+        info: dict[str, Any] = {}
+        if slug and self.settings.owner_lookup_enabled:
+            info = await request_owner(self.redis, slug, timeout=self.settings.owner_lookup_timeout) or {}
+            if info and not _has_contact(owner):
+                owner = {**owner, **{k: v for k, v in info.items() if k != "value"}}
+        return owner, info
 
     async def _send_to_subscribers(
         self,
@@ -338,6 +382,7 @@ class NotificationDispatcher:
         text: str,
         keyboard: InlineKeyboardMarkup | None,
         has_contact: bool = True,
+        preview_url: str | None = None,
     ) -> None:
         """Находит подписчиков с подходящими фильтрами и шлёт им сообщение параллельно.
 
@@ -390,8 +435,11 @@ class NotificationDispatcher:
             return
 
         # Отправляем параллельно
+        # Превью ссылки: карточка подарка Telegram (t.me/nft/…) с картинкой, а не баннер маркетплейса
+        preview = LinkPreviewOptions(url=preview_url, show_above_text=False) if preview_url \
+            else LinkPreviewOptions(is_disabled=True)
         tasks = [
-            self.bot.send_message(uid, text, parse_mode="HTML", reply_markup=keyboard)
+            self.bot.send_message(uid, text, parse_mode="HTML", reply_markup=keyboard, link_preview_options=preview)
             for uid in target_users
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -429,7 +477,7 @@ class NotificationDispatcher:
         if owner.get("name"):
             return f"{owner['name']} (контакт скрыт)"
         if fallback_ton:
-            return f"<code>{fallback_ton[:16]}…</code>"
+            return f"<a href='https://tonviewer.com/{fallback_ton}'>кошелёк <code>{fallback_ton[:10]}…</code></a>"
         return "скрыт настройками приватности"
 
     def _owner_keyboard(self, owner: dict[str, Any], gift_link: str | None = None) -> InlineKeyboardMarkup | None:
@@ -450,7 +498,7 @@ class NotificationDispatcher:
         Строки редкости и наличия для уведомления.
 
         Редкость = attr.items_count / collection.items_count * 100 (приближённо,
-        по выборке rarity_sample_size). Наличие = collections.items_count (on-chain).
+        по выборке rarity_sample_size). Наличие = число улучшенных из Telegram (tg_market:stats), иначе collections.items_count (on-chain).
         """
         if collection_id is None:
             return []
@@ -465,7 +513,11 @@ class NotificationDispatcher:
         if not coll:
             return []
 
-        lines = [f"📦 Выпущено: <b>{coll:,}</b> NFT".replace(",", " ")]
+        # Выпущено: число улучшенных по данным Telegram (оно больше, чем подарков в блокчейне); нет — on-chain
+        stats = await cache_get_json(self.redis, f"tg_market:stats:{collection_id}")
+        issued = stats.get("issued") if isinstance(stats, dict) else None
+        total = int(issued) if isinstance(issued, (int, float)) and issued > coll else coll
+        lines = [f"📦 Выпущено: <b>{total:,}</b> NFT".replace(",", " ")]
 
         for attr_type in ("model", "background", "symbol", "pattern"):
             value = attributes.get(attr_type)

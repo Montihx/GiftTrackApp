@@ -120,7 +120,9 @@ export default function CollectionPage({ id }) {
     );
   }
 
-  const floor = live && live.floor_price != null ? live.floor_price : detail.floor_price;
+  const onchainFloor = live && live.floor_price != null ? live.floor_price : detail.floor_price;
+  const floorCandidates = [onchainFloor, detail.tg_floor_price].filter((v) => v != null && v > 0);
+  const floor = floorCandidates.length ? Math.min(...floorCandidates) : onchainFloor;
   const change = live && live.floor_24h_change != null ? live.floor_24h_change : detail.floor_24h_change;
   const attrs = (detail.top_attributes && detail.top_attributes[attrTab]) || [];
   // у Telegram-подарков нет узоров — пустые вкладки не показываем (кроме активной/первой)
@@ -146,6 +148,33 @@ export default function CollectionPage({ id }) {
           {isFav ? "★" : "☆"}
         </button>
       </div>
+
+      {(detail.issued_count != null || detail.tg_floor_price != null || onchainFloor != null) && (
+        <div className="panel rows" style={{ marginBottom: 12 }}>
+          <div className="row-item">
+            <div className="row-main">Флор в блокчейне</div>
+            <div className="row-price">{fmtTon(onchainFloor)}</div>
+          </div>
+          {detail.tg_floor_price != null && (
+            <div className="row-item">
+              <div className="row-main">
+                Флор маркета Telegram
+                {detail.tg_listed != null && <div className="row-sub">{detail.tg_listed.toLocaleString("ru-RU")} в продаже</div>}
+              </div>
+              <div className="row-price">{fmtTon(detail.tg_floor_price)}</div>
+            </div>
+          )}
+          {detail.issued_count != null && (
+            <div className="row-item">
+              <div className="row-main">
+                Выпущено улучшенных
+                {detail.items_count > 0 && <div className="row-sub">{detail.items_count.toLocaleString("ru-RU")} из них в блокчейне</div>}
+              </div>
+              <div className="row-price" style={{ color: "#fff" }}>{detail.issued_count.toLocaleString("ru-RU")}</div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="section">
         <div className="section-title">

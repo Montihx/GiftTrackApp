@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     phone: str = Field(default="")
     telethon_session: str = Field(default="sessions/resolver_session")
     # Маркет подарков Telegram (официальный MTProto, тот же Telethon-аккаунт; сервис resolver)
+    # Название нативной монеты в интерфейсе и уведомлениях (TonAPI и GetGems называют её GRAM; было TON)
+    coin_label: str = Field(default="GRAM")
     # Владелец подарка по slug через Telegram (для листингов из блокчейна и апгрейдов)
     owner_lookup_enabled: bool = Field(default=True)
     owner_lookup_timeout: float = Field(default=4.0, ge=0)  # сколько уведомление ждёт ответ воркера, с

@@ -33,6 +33,8 @@ from db.models import Collection, Favorite, Filter
 
 SEEN_KEY = "tg_market:seen:{cid}"
 FLOOR_KEY = "tg_market:floor:{cid}"
+STATS_KEY = "tg_market:stats:{cid}"  # {"issued": N, "listed": N, "ton_per_star": x} — для API и уведомлений
+RATE_KEY = "tg_market:rate"  # GRAM за 1 Star (медиана по листингам, где есть обе цены)
 STATE_TTL = 7 * 86400
 NANO = 10**9
 
@@ -77,7 +79,14 @@ def parse_resale_gift(gift: Any, users: dict[int, Any], chats: dict[int, Any] | 
         "slug": gift.slug, "num": gift.num, "title": gift.title, "attributes": attrs,
         "price_stars": stars, "price_ton": ton, "seller_tg_id": owner_id,
         "seller_username": username, "seller_name": name, "gift_address": gift.gift_address,
+        "issued": getattr(gift, "availability_issued", None),
     }
+
+
+def ton_per_star(items: list[dict[str, Any]]) -> float | None:
+    """Курс из листингов, где Telegram показывает обе цены (цена в TON — пересчёт из Stars)."""
+    ratios = sorted(i["price_ton"] / i["price_stars"] for i in items if i["price_ton"] and i["price_stars"])
+    return ratios[len(ratios) // 2] if ratios else None
 
 
 def has_owner(item: dict[str, Any]) -> bool:
@@ -179,6 +188,15 @@ class TelegramMarketWatcher:
         users = {u.id: u for u in getattr(res, "users", None) or []}
         chats = {c.id: c for c in getattr(res, "chats", None) or []}
         items = [i for i in (parse_resale_gift(g, users, chats) for g in getattr(res, "gifts", None) or []) if i]
+        # Статистика коллекции для витрины и уведомлений: число улучшенных (у Telegram их больше, чем в блокчейне),
+        # число листингов и курс Stars -> монета
+        rate = ton_per_star(items)
+        issued = max((i["issued"] for i in items if i["issued"]), default=None)
+        await cache_set_json(self.redis, STATS_KEY.format(cid=cid), {
+            "issued": issued, "listed": getattr(res, "count", None), "ton_per_star": rate,
+        }, ttl=STATE_TTL)
+        if rate:
+            await cache_set_json(self.redis, RATE_KEY, rate, ttl=STATE_TTL)
         key = SEEN_KEY.format(cid=cid)
         bootstrap = not await self.redis.exists(key)
         new = [i for i in items if not await self.redis.sismember(key, seen_key(i))]

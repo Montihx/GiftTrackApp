@@ -82,6 +82,64 @@ def _username(init_data: dict[str, Any]) -> str | None:
 # ---------------------------------------------------------------------------
 # Коллекции
 # ---------------------------------------------------------------------------
+async def _tg_stats(ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Данные Telegram по коллекциям (число улучшенных, флор и листинги маркета Telegram) одним MGET.
+
+    Пишет их TelegramMarketWatcher (сервис resolver). Нет Redis/данных — пусто, витрина работает на БД.
+    """
+    if not ids:
+        return {}
+    try:
+        import orjson
+
+        from core.redis_client import create_redis
+
+        redis = create_redis()
+        try:
+            keys = [f"tg_market:floor:{c}" for c in ids] + [f"tg_market:stats:{c}" for c in ids] + ["tg_market:rate"]
+            raw = await redis.mget(keys)
+        finally:
+            await redis.aclose()
+
+        def load(v: Any) -> Any:
+            try:
+                return orjson.loads(v) if v is not None else None
+            except orjson.JSONDecodeError:
+                return None
+
+        n = len(ids)
+        rate_global = load(raw[-1])
+        out: dict[str, dict[str, Any]] = {}
+        for i, cid in enumerate(ids):
+            floor, stats = load(raw[i]) or {}, load(raw[n + i]) or {}
+            rate = stats.get("ton_per_star") or rate_global
+            min_stars = floor.get("min_stars")
+            out[cid] = {
+                "issued_count": stats.get("issued"),
+                "tg_listed": floor.get("listed") if floor.get("listed") is not None else stats.get("listed"),
+                "tg_floor_stars": min_stars,
+                "tg_floor_price": round(min_stars * rate, 2) if min_stars and rate else None,
+            }
+        return out
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"showcase: данные Telegram недоступны: {exc!r}")
+        return {}
+
+
+def _apply_tg(item: dict[str, Any], tg: dict[str, Any] | None) -> None:
+    """Добавляет в карточку данные Telegram и «лучший флор» (минимум из блокчейна и маркета Telegram)."""
+    tg = tg or {}
+    item["issued_count"] = tg.get("issued_count")
+    item["tg_listed"] = tg.get("tg_listed")
+    item["tg_floor_stars"] = tg.get("tg_floor_stars")
+    item["tg_floor_price"] = tg.get("tg_floor_price")
+    prices = [p for p in (item.get("floor_price"), tg.get("tg_floor_price")) if p]
+    item["best_floor"] = min(prices) if prices else None
+    item["best_floor_source"] = (
+        None if not prices else ("telegram" if tg.get("tg_floor_price") == min(prices) else "onchain")
+    )
+
+
 _LIST_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
 
 
@@ -97,6 +155,9 @@ async def get_collections(session: AsyncSession = Depends(get_session)) -> dict[
     ids = [str(i) for i in (await session.execute(select(Collection.id))).scalars().all()]
     overrides = await _redis_floors(ids)
     data = {"collections": await sc.list_collections(session, overrides)}
+    tg = await _tg_stats([c["id"] for c in data["collections"]])
+    for item in data["collections"]:
+        _apply_tg(item, tg.get(item["id"]))
     if ttl > 0:
         _LIST_CACHE.update(ts=now, data=data)
     return data
@@ -117,6 +178,7 @@ async def get_collection(collection_id: str, session: AsyncSession = Depends(get
     override = (await _redis_floors([str(cid)])).get(str(cid))
     detail = await sc.get_collection_detail(session, cid, override)
     assert detail is not None
+    _apply_tg(detail, (await _tg_stats([str(cid)])).get(str(cid)))
     return detail
 
 

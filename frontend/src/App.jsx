@@ -1,6 +1,6 @@
 // App.jsx — фильтры уведомлений: список «Мои фильтры» и форма «Создать»
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { API, apiGet, apiRequest, cachedGet, fmtTon } from "./api";
+import { API, COIN, apiGet, apiRequest, cachedGet, fmtTon } from "./api";
 import { CollectionIcon } from "./ui";
 
 const EMPTY_FORM = {
@@ -232,7 +232,7 @@ export default function Filters() {
     if (f.symbol_id) parts.push(`Символ: ${f.symbol_name || "—"}`);
     if (f.pattern_id) parts.push(`Узор: ${f.pattern_name || "—"}`);
     if (f.floor_min != null || f.floor_max != null) {
-      parts.push(`Флор модели ${f.floor_min != null ? `от ${f.floor_min}` : ""} ${f.floor_max != null ? `до ${f.floor_max}` : ""} TON`.replace(/\s+/g, " "));
+      parts.push(`Флор модели ${f.floor_min != null ? `от ${f.floor_min}` : ""} ${f.floor_max != null ? `до ${f.floor_max}` : ""} ${COIN}`.replace(/\s+/g, " "));
     }
     const base = parts.length ? parts.join(" · ") : "Все листинги и продажи";
     return f.require_owner === false ? `${base} · даже без контакта владельца` : base;
@@ -329,7 +329,7 @@ export default function Filters() {
           )}
 
           <div className="fblock">
-            <div className="fblock-title">Флор модели (TON)</div>
+            <div className="fblock-title">Флор модели ({COIN})</div>
             <div className="row">
               <div>
                 <label>от</label>

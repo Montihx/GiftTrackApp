@@ -134,7 +134,7 @@ async def test_process_listing_includes_analytics(session):
     assert bot_mock.send_message.called
     text = bot_mock.send_message.call_args[0][1]
     assert "ЛИСТИНГ" in text
-    assert "2 400 TON" in text
+    assert "2 400 GRAM" in text
     assert "@seller" in text
 
 
@@ -197,7 +197,7 @@ def test_format_sale_message() -> None:
     })
     assert "GIFT SOLD!" in text and "Plush Pepe #2675" in text
     assert "Model: Amalgam" in text and "Backdrop: Dark Lilac" in text and "Symbol: Wolf Rage" in text
-    assert "2 500 TON" in text and "≈ $2 727.5" in text and "Sold on GetGems" in text
+    assert "2 500 GRAM" in text and "≈ $2 727.5" in text and "Sold on GetGems" in text
     no_usd = format_sale_message({"collection_name": "Teddy", "nft_index": 3, "price_ton": 5,
                                   "marketplace": "marketapp"})
     assert "Teddy #3" in no_usd and "≈" not in no_usd and "Sold on Marketapp" in no_usd
@@ -258,3 +258,61 @@ async def test_filters_match_symbol_and_model_floor_range(session):
     await dispatcher.process_sale({"collection_id": str(coll.id), "price_ton": 1, "marketplace": "getgems",
                                    "attributes": {"model": "Amalgam", "symbol": "Moon"}})
     assert sorted(c[0][0] for c in bot_mock.send_message.call_args_list) == [11, 13]
+
+
+async def test_listing_alert_uses_telegram_issued_valuation_preview_and_wallet_link(session):
+    """Выпущено — по данным Telegram; оценка; превью карточки подарка; кошелёк-ссылка; GRAM."""
+    from aiogram.types import LinkPreviewOptions
+
+    from db.models import Collection, Filter, User
+
+    coll = Collection(name="Plush Pepe", contract_address="EQissued_disp", source="seed", items_count=2483)
+    session.add_all([coll, User(tg_id=31)])
+    await session.flush()
+    session.add(Filter(user_id=31, collection_id=coll.id, is_active=True, require_owner=False))
+    await session.commit()
+
+    import orjson
+
+    from services.owner_lookup import ALIVE_KEY, CACHE_KEY
+
+    store = {
+        f"tg_market:stats:{coll.id}": orjson.dumps({"issued": 2825}),
+        ALIVE_KEY: b"1",
+        CACHE_KEY.format(slug="PlushPepe-727"): orjson.dumps(
+            {"value": {"currency": "TON", "value": 3801.0, "last_sale": 3500.0}}),
+    }
+    redis = AsyncMock()
+    redis.get = AsyncMock(side_effect=lambda k: store.get(k))
+    bot, resolver = AsyncMock(), AsyncMock()
+    resolver.resolve = AsyncMock(return_value={})
+    d = NotificationDispatcher(bot=bot, session=session, redis=redis, resolver=resolver)
+    await d.process_listing({"collection_id": str(coll.id), "marketplace": "getgems", "nft_name": "Plush Pepe #727",
+                             "nft_index": 727, "price_ton": 7555, "seller_ton": "0:a16b8d1f692dd9ab",
+                             "attributes": {"model": "Pink Latex"}})
+    text = bot.send_message.call_args[0][1]
+    kwargs = bot.send_message.call_args[1]
+    assert "<b>2 825</b> NFT" in text and "2 483" not in text  # число улучшенных из Telegram, не on-chain
+    assert "7 555 GRAM" in text and "Оценка Telegram: ≈ <b>3 801 GRAM</b>" in text and "Последняя продажа: 3 500 GRAM" in text
+    assert "https://tonviewer.com/0:a16b8d1f692dd9ab" in text
+    assert kwargs["link_preview_options"] == LinkPreviewOptions(url="https://t.me/nft/PlushPepe-727", show_above_text=False)
+    assert [b.url for row in kwargs["reply_markup"].inline_keyboard for b in row] == ["https://t.me/nft/PlushPepe-727"]
+
+
+async def test_alert_without_gift_slug_disables_link_preview(session):
+    from aiogram.types import LinkPreviewOptions
+
+    from db.models import Collection, Filter, User
+
+    coll = Collection(name="NoSlug", contract_address="EQnoslug_disp", source="seed")
+    session.add_all([coll, User(tg_id=32)])
+    await session.flush()
+    session.add(Filter(user_id=32, collection_id=coll.id, is_active=True, require_owner=False))
+    await session.commit()
+    redis, bot, resolver = AsyncMock(), AsyncMock(), AsyncMock()
+    redis.get = AsyncMock(return_value=None)
+    resolver.resolve = AsyncMock(return_value={})
+    d = NotificationDispatcher(bot=bot, session=session, redis=redis, resolver=resolver)
+    await d.process_listing({"collection_id": str(coll.id), "marketplace": "getgems", "nft_name": "weird name",
+                             "price_ton": 1, "seller_ton": "0:x", "attributes": {}})
+    assert bot.send_message.call_args[1]["link_preview_options"] == LinkPreviewOptions(is_disabled=True)
