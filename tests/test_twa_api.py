@@ -177,16 +177,19 @@ async def test_collection_attributes_endpoint(session):
         app.dependency_overrides.clear()
 
 
-def test_apply_tg_merges_onchain_and_telegram_floor() -> None:
+def test_apply_tg_keeps_onchain_floor_primary(monkeypatch) -> None:
     from api.showcase import _apply_tg
+    from core.config import get_settings
 
-    item = {"floor_price": 15.0}
-    _apply_tg(item, {"issued_count": 2825, "tg_listed": 40, "tg_floor_stars": 20000, "tg_floor_price": 280.5})
-    assert item["issued_count"] == 2825 and item["tg_floor_price"] == 280.5
-    assert item["best_floor"] == 15.0 and item["best_floor_source"] == "onchain"  # дешевле в блокчейне
-    cheaper = {"floor_price": 400.0}
-    _apply_tg(cheaper, {"tg_floor_price": 280.5})
-    assert cheaper["best_floor"] == 280.5 and cheaper["best_floor_source"] == "telegram"
+    tg = {"issued_count": 2825, "tg_listed": 40, "tg_floor_stars": 20000, "tg_floor_price": 280.5}
+    item = {"floor_price": 400.0}
+    _apply_tg(item, tg)  # по умолчанию флор Telegram скрыт, основной — ончейн
+    assert item["issued_count"] == 2825 and item["tg_floor_price"] is None
+    assert item["best_floor"] == 400.0 and item["best_floor_source"] == "onchain"
+    monkeypatch.setattr(get_settings(), "tg_floor_show", True)
+    shown = {"floor_price": 400.0}
+    _apply_tg(shown, tg)  # включено: показывается справочно, но не подменяет ончейн
+    assert shown["tg_floor_price"] == 280.5 and shown["best_floor"] == 400.0
     none = {"floor_price": None}
     _apply_tg(none, None)
     assert none["best_floor"] is None and none["issued_count"] is None

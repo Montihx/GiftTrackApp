@@ -121,8 +121,7 @@ export default function CollectionPage({ id }) {
   }
 
   const onchainFloor = live && live.floor_price != null ? live.floor_price : detail.floor_price;
-  const floorCandidates = [onchainFloor, detail.tg_floor_price].filter((v) => v != null && v > 0);
-  const floor = floorCandidates.length ? Math.min(...floorCandidates) : onchainFloor;
+  const floor = onchainFloor;
   const change = live && live.floor_24h_change != null ? live.floor_24h_change : detail.floor_24h_change;
   const attrs = (detail.top_attributes && detail.top_attributes[attrTab]) || [];
   // у Telegram-подарков нет узоров — пустые вкладки не показываем (кроме активной/первой)
