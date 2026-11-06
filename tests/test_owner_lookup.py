@@ -211,16 +211,17 @@ async def test_event_without_matching_filter_skips_owner_lookup(session: Any) ->
     assert d.stats["listings"] == 1 and d.stats["upgrades"] == 1
 
 
-def test_nft_url_prefers_telegram_gift_page_and_friendly_address() -> None:
+def test_links_are_telegram_only() -> None:
     from services.dispatcher import format_sale_message, nft_url
 
-    assert nft_url("0:" + "ab" * 32, "Holiday Drink #5901") == "https://t.me/nft/HolidayDrink-5901"
     raw = "0:" + "ab" * 32
-    url = nft_url(raw)  # без номера в названии — GetGems по user-friendly адресу, а не по raw
-    assert url.startswith("https://getgems.io/nft/EQ") and "0:" not in url
+    assert nft_url(raw, "Holiday Drink #5901") == "https://t.me/nft/HolidayDrink-5901"
+    assert nft_url(raw) is None and nft_url(raw, "без номера") is None  # сторонние сайты не используем
     text = format_sale_message({"nft_address": raw, "nft_name": "Holiday Drink #5901", "price_ton": 4.95,
                                 "marketplace": "getgems", "attributes": {}})
-    assert "https://t.me/nft/HolidayDrink-5901" in text and "getgems.io/nft/0:" not in text
+    assert "https://t.me/nft/HolidayDrink-5901" in text and "getgems.io" not in text and "tonviewer" not in text
+    no_slug = format_sale_message({"nft_address": raw, "nft_name": "Unnamed", "price_ton": 1, "marketplace": "getgems"})
+    assert "<a href" not in no_slug and "<b>Unnamed</b>" in no_slug
 
 
 async def test_request_owner_does_not_wait_when_queue_is_long() -> None:
