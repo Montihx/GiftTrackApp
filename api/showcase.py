@@ -130,6 +130,9 @@ async def _tg_stats(ids: list[str]) -> dict[str, dict[str, Any]]:
         return {}
 
 
+ONCHAIN_SUSPECT_RATIO = 0.25  # ончейн-флор < 25% от минимума по MRKT/Portals считаем недостоверным
+
+
 def _apply_tg(item: dict[str, Any], tg: dict[str, Any] | None) -> None:
     """Добавляет в карточку данные Telegram и «лучший флор» (минимум из блокчейна и маркета Telegram)."""
     tg = tg or {}
@@ -141,7 +144,13 @@ def _apply_tg(item: dict[str, Any], tg: dict[str, Any] | None) -> None:
     # флоры сторонних маркетов (MRKT, Portals); флор Telegram сюда не входит (TG_FLOOR_SHOW — только справочно)
     markets = tg.get("market_floors") or {}
     item["market_floors"] = markets
-    cands = {"onchain": item.get("floor_price"), **markets}
+    onchain = item.get("floor_price")
+    # Ончейн-флор в разы ниже флоров маркетов (Scared Cat: 15 против ~285 на MRKT и Portals) — почти всегда нерабочий
+    # листинг (закрытый/ошибочный контракт продажи): купить по такой цене нельзя. Не берём его как «лучший флор».
+    market_min = min(markets.values()) if markets else None
+    suspect = bool(onchain and market_min and float(onchain) < ONCHAIN_SUSPECT_RATIO * float(market_min))
+    item["onchain_suspect"] = suspect
+    cands = {"onchain": None if suspect else onchain, **markets}
     cands = {k: v for k, v in cands.items() if v}
     best = min(cands, key=cands.get) if cands else None
     item["best_floor"] = cands[best] if best else None

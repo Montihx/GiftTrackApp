@@ -121,7 +121,8 @@ export default function CollectionPage({ id }) {
   }
 
   const onchainFloor = live && live.floor_price != null ? live.floor_price : detail.floor_price;
-  const floor = onchainFloor;
+  // ончейн-флор в разы ниже маркетов — вероятно нерабочий листинг: в шапке показываем лучший достоверный флор
+  const floor = detail.onchain_suspect && detail.best_floor != null ? detail.best_floor : onchainFloor;
   const change = live && live.floor_24h_change != null ? live.floor_24h_change : detail.floor_24h_change;
   const attrs = (detail.top_attributes && detail.top_attributes[attrTab]) || [];
   // у Telegram-подарков нет узоров — пустые вкладки не показываем (кроме активной/первой)
@@ -151,7 +152,10 @@ export default function CollectionPage({ id }) {
       {(detail.issued_count != null || detail.tg_floor_price != null || onchainFloor != null || Object.keys(detail.market_floors || {}).length > 0) && (
         <div className="panel rows" style={{ marginBottom: 12 }}>
           <div className="row-item">
-            <div className="row-main">Флор в блокчейне</div>
+            <div className="row-main">
+              Флор в блокчейне
+              {detail.onchain_suspect && <div className="row-sub">в разы ниже маркетов — похоже на нерабочий листинг</div>}
+            </div>
             <div className="row-price">{fmtTon(onchainFloor)}</div>
           </div>
           {Object.entries(detail.market_floors || {}).map(([src, price]) => (
