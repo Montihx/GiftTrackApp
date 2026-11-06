@@ -51,6 +51,14 @@ docker compose ps
 docker compose logs -f bot
 ```
 
+**Обновление уже работающего сервера** — одной командой (бэкап `.env`, `git pull`, новые настройки в
+`.env` без изменения старых, запрос недостающих ключей со скрытым вводом, сборка, запуск, вход Telegram
+по QR, проверка логов):
+
+```bash
+cd ~/gifts/GiftTrackApp && git pull origin main && bash scripts/update_server.sh
+```
+
 `migrate` отрабатывает автоматически, остальные сервисы ждут его завершения.
 Порты postgres/redis/api/frontend привязаны к `127.0.0.1`, наружу открыты
 только 80/443 через nginx.
