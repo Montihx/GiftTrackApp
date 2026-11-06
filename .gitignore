@@ -9,3 +9,4 @@ node_modules/
 frontend/dist/
 .venv/
 docker-compose.override.yml
+*.egg-info/
