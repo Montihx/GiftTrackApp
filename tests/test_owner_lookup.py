@@ -1,0 +1,107 @@
+# tests/test_owner_lookup.py — владелец подарка по slug (Redis-очередь dispatcher <-> resolver) и фильтр «только с контактом»
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+from unittest.mock import AsyncMock
+
+import orjson
+
+from db.models import Collection, Filter, User
+from services.owner_lookup import ALIVE_KEY, CACHE_KEY, QUEUE_KEY, OwnerLookupWorker, gift_slug, request_owner
+
+
+class FakeRedis:
+    def __init__(self) -> None:
+        self.kv: dict[str, bytes] = {}
+        self.queue: list[str] = []
+
+    async def get(self, key: str) -> bytes | None:
+        return self.kv.get(key)
+
+    async def set(self, key: str, value: bytes, ex: int | None = None) -> None:
+        self.kv[key] = value
+
+    async def lpush(self, key: str, value: str) -> None:
+        assert key == QUEUE_KEY
+        self.queue.append(value)
+
+
+def test_gift_slug() -> None:
+    assert gift_slug("Plush Pepe #727") == "PlushPepe-727"
+    assert gift_slug("Durov’s Cap #1") == "DurovsCap-1"
+    assert gift_slug("Jack-in-the-Box #12") == "JackintheBox-12"
+    assert gift_slug("no number") is None and gift_slug(None) is None
+
+
+async def test_request_owner_cache_alive_and_answer() -> None:
+    r = FakeRedis()
+    assert await request_owner(r, "A-1", timeout=0.05, poll=0.01) is None and r.queue == []  # воркера нет — не ждём
+    r.kv[CACHE_KEY.format(slug="A-2")] = orjson.dumps({"tg_user_id": 5, "username": "vasya"})
+    assert (await request_owner(r, "A-2"))["username"] == "vasya"
+    r.kv[CACHE_KEY.format(slug="A-3")] = orjson.dumps({})
+    assert await request_owner(r, "A-3") is None  # известный «скрыт»
+
+    r.kv[ALIVE_KEY] = b"1"
+
+    async def worker() -> None:
+        await asyncio.sleep(0.03)
+        r.kv[CACHE_KEY.format(slug="A-4")] = orjson.dumps({"tg_user_id": 7, "username": "petya", "name": "Petya"})
+
+    task = asyncio.create_task(worker())
+    got = await request_owner(r, "A-4", timeout=1.0, poll=0.01)
+    await task
+    assert r.queue == ["A-4"] and got is not None and got["username"] == "petya"
+    assert await request_owner(r, "A-5", timeout=0.05, poll=0.01) is None  # воркер не ответил
+
+
+async def test_worker_caches_found_and_hidden() -> None:
+    from telethon.tl import types
+
+    r = FakeRedis()
+    w = OwnerLookupWorker(None, r)
+    calls: list[str] = []
+
+    async def fake_lookup(slug: str) -> dict[str, Any]:
+        calls.append(slug)
+        return {"tg_user_id": 9, "username": "u", "name": "U"} if slug == "X-1" else {}
+
+    w.lookup = fake_lookup  # type: ignore[method-assign]
+    assert (await w.handle("X-1"))["username"] == "u"
+    assert await w.handle("X-2") == {}
+    await w.handle("X-1")  # из кэша
+    assert calls == ["X-1", "X-2"] and w.stats == {"lookups": 2, "found": 1, "hidden": 1, "flood_waits": 0}
+    assert orjson.loads(r.kv[CACHE_KEY.format(slug="X-2")]) == {}
+    assert types.StarGiftUnique is not None  # telethon-типы доступны воркеру
+
+
+async def test_filter_require_owner_gates_ownerless_alerts(session: Any) -> None:
+    from services.dispatcher import NotificationDispatcher
+
+    coll = Collection(name="Plush Pepe", contract_address="EQgate_owner", source="seed")
+    session.add_all([coll, User(tg_id=21), User(tg_id=22)])
+    await session.flush()
+    session.add_all([Filter(user_id=21, collection_id=coll.id, is_active=True),  # require_owner по умолчанию
+                     Filter(user_id=22, collection_id=coll.id, is_active=True, require_owner=False)])
+    await session.commit()
+
+    bot, redis, resolver = AsyncMock(), AsyncMock(), AsyncMock()
+    redis.get = AsyncMock(return_value=None)
+    resolver.resolve = AsyncMock(return_value={})  # контакта нет
+    d = NotificationDispatcher(bot=bot, session=session, redis=redis, resolver=resolver)
+    base = {"collection_id": str(coll.id), "marketplace": "getgems", "nft_name": "Plush Pepe #5", "nft_index": 5,
+            "price_ton": 10, "seller_ton": "0:seller", "attributes": {}}
+    await d.process_listing(base)
+    assert [c[0][0] for c in bot.send_message.call_args_list] == [22]  # только тот, кто разрешил слать без контакта
+
+    bot.send_message.reset_mock()
+    resolver.resolve = AsyncMock(return_value={"tg_user_id": 77, "username": "seller"})
+    await d.process_listing(base)
+    assert sorted(c[0][0] for c in bot.send_message.call_args_list) == [21, 22]  # контакт есть — получают оба
+
+    bot.send_message.reset_mock()
+    resolver.resolve = AsyncMock(return_value={})
+    await d.process_upgrade({"collection_id": str(coll.id), "nft_address": "0:n", "index": 5, "owner_ton": "",
+                             "metadata": {"name": "Plush Pepe #5", "model": "Amalgam", "symbol": "Moon"}})
+    assert [c[0][0] for c in bot.send_message.call_args_list] == [22]
+    assert "АПГРЕЙД" in bot.send_message.call_args[0][1] and "Символ: Moon" in bot.send_message.call_args[0][1]

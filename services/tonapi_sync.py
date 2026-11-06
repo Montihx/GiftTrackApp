@@ -39,6 +39,7 @@ from core.config import Settings
 from core.redis_client import (
     STREAM_NFT_LISTINGS,
     STREAM_NFT_SALES,
+    STREAM_NFT_UPGRADES,
     cache_get_json,
     cache_set_json,
     floor_key,
@@ -99,6 +100,7 @@ class SyncDiff:
     # (текущее состояние, цена продажи, прежнее состояние — продавец и маркет листинга)
     sales: list[tuple[ItemState, Decimal, ItemState]] = field(default_factory=list)
     transfers: list[tuple[ItemState, str | None]] = field(default_factory=list)
+    bootstrap: bool = False  # первый проход: new_items — это всё содержимое коллекции, не апгрейды
 
 
 def _owner(acc: dict[str, Any] | None) -> str | None:
@@ -175,6 +177,7 @@ def diff_states(prev: dict[str, ItemState] | None, cur: list[ItemState]) -> Sync
     diff = SyncDiff()
     if prev is None:
         diff.new_items = list(cur)
+        diff.bootstrap = True
         return diff
     for c in cur:
         p = prev.get(c.address)
@@ -409,6 +412,19 @@ class TonApiSync:
             payload["collection_id"] = cid
             payload["nft_name"] = item.name or f"{name} #{item.index}"
             await stream_publish(self.redis, STREAM_NFT_LISTINGS, payload)
+        # Апгрейды: предмет, которого не было в прошлых проходах (после первого прохода коллекции).
+        # Пачка больше upgrade_burst_max за раз — не апгрейды, а сбой состояния: не рассылаем.
+        if not diff.bootstrap and diff.new_items:
+            if len(diff.new_items) > self.settings.upgrade_burst_max:
+                logger.warning(f"[tonapi_sync] {name}: {len(diff.new_items)} новых предметов за раз — апгрейды не шлю")
+            else:
+                for item in diff.new_items:
+                    await stream_publish(self.redis, STREAM_NFT_UPGRADES, {
+                        "type": "mint", "collection_id": cid, "nft_address": item.address, "index": item.index,
+                        "owner_ton": item.owner or "",
+                        "metadata": {"name": item.name or f"{name} #{item.index}", **item.attrs},
+                    })
+                self.stats["upgrades"] = self.stats.get("upgrades", 0) + len(diff.new_items)
         ton_usd = await self._ton_usd() if diff.sales else None
         for item, price, prev in diff.sales:
             attrs = dict(item.attrs or prev.attrs)

@@ -198,3 +198,11 @@ button.row-item { cursor: pointer; }
 .fcard-main { flex: 1; min-width: 0; }
 .fcard .card-sub { margin-bottom: 0; }
 .list .empty .btn { font-size: 14px; }
+
+/* чекбокс «только с контактом владельца» */
+.check { display: flex; align-items: flex-start; gap: 12px; margin-top: 12px; padding: 12px; background: var(--card);
+  border-radius: var(--radius); cursor: pointer; }
+.check input { width: 22px; height: 22px; margin-top: 1px; flex: none; accent-color: #4a90d9; }
+.check span { font-size: 15px; line-height: 1.35; }
+.check small { display: block; margin-top: 3px; color: var(--muted); font-size: 12.5px; }
+.form .check input { width: 22px; padding: 0; }

@@ -49,6 +49,11 @@ async def _telethon_worker(redis, stop_event: asyncio.Event) -> None:
     logger.info("Telethon worker запущен")
     scanner = BioScanner(client, redis, session_scope, settings)
     jobs = [_supervise("bio_scanner", lambda: scanner.run(stop_event), stop_event)]
+    if settings.owner_lookup_enabled:
+        from services.owner_lookup import OwnerLookupWorker
+
+        lookup = OwnerLookupWorker(client, redis, settings.owner_lookup_interval)
+        jobs.append(_supervise("owner_lookup", lambda: lookup.run(stop_event), stop_event))
     if settings.tg_market_enabled:
         from services.telegram_market import TelegramMarketWatcher
 

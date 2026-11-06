@@ -154,6 +154,8 @@ class Filter(Base):
     floor_min: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     floor_max: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("TRUE"))
+    # TRUE: слать листинги/апгрейды только если известен контакт владельца (можно написать)
+    require_owner: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("TRUE"))
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

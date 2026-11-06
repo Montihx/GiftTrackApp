@@ -181,7 +181,7 @@ async def test_dispatcher_hidden_owner_and_buttons(session: Any) -> None:
     coll = Collection(name="Plush Pepe", contract_address="EQhidden_disp", source="seed")
     session.add_all([coll, User(tg_id=6)])
     await session.flush()
-    session.add(Filter(user_id=6, collection_id=coll.id, is_active=True))
+    session.add(Filter(user_id=6, collection_id=coll.id, is_active=True, require_owner=False))
     await session.commit()
     bot, redis = AsyncMock(), AsyncMock()
     redis.get = AsyncMock(return_value=None)
