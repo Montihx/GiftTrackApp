@@ -46,7 +46,12 @@ class FilterCreate(BaseModel):
     pattern_id: str | None = None
     floor_min: float | None = Field(default=None, ge=0)
     floor_max: float | None = Field(default=None, ge=0)
-    require_owner: bool = True  # слать только если известен контакт владельца
+    require_owner: bool = True  # листинги: слать только если известен контакт владельца
+    require_owner_upgrade: bool = True  # апгрейды: то же
+    number_min: int | None = Field(default=None, ge=0)
+    number_max: int | None = Field(default=None, ge=0)
+    price_min: float | None = Field(default=None, ge=0)
+    price_max: float | None = Field(default=None, ge=0)
 
 
 def _parse_user_id(init_data: dict[str, Any]) -> int:
@@ -100,6 +105,11 @@ async def get_filters(
                 "floor_max": float(f.floor_max) if f.floor_max is not None else None,
                 "is_active": f.is_active,
                 "require_owner": f.require_owner,
+                "require_owner_upgrade": f.require_owner_upgrade,
+                "number_min": f.number_min,
+                "number_max": f.number_max,
+                "price_min": float(f.price_min) if f.price_min is not None else None,
+                "price_max": float(f.price_max) if f.price_max is not None else None,
             }
             for f in filters
         ]
@@ -130,6 +140,11 @@ async def create_filter(
         floor_min=payload.floor_min,
         floor_max=payload.floor_max,
         require_owner=payload.require_owner,
+        require_owner_upgrade=payload.require_owner_upgrade,
+        number_min=payload.number_min,
+        number_max=payload.number_max,
+        price_min=payload.price_min,
+        price_max=payload.price_max,
         is_active=True,
     )
     session.add(new_filter)

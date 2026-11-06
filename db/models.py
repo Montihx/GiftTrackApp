@@ -156,6 +156,15 @@ class Filter(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("TRUE"))
     # TRUE: слать листинги/апгрейды только если известен контакт владельца (можно написать)
     require_owner: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("TRUE"))
+    # то же для апгрейдов (раньше был один флаг на оба типа событий)
+    require_owner_upgrade: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("TRUE")
+    )
+    # номер подарка (#727) и цена листинга (в монете): диапазоны, пусто — без ограничения
+    number_min: Mapped[int | None] = mapped_column(BigInteger)
+    number_max: Mapped[int | None] = mapped_column(BigInteger)
+    price_min: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    price_max: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
