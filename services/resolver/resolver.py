@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import Any
 
 import orjson
@@ -37,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings, get_settings
+from core.retry import PermanentError
 from core.redis_client import cache_get_json, cache_set_json, wallet_key
 from db.models import WalletTgMap
 from services.collection_discovery import _http_request
@@ -73,6 +75,16 @@ class OwnerResolver:
         self.settings = settings or get_settings()
         self._rate = asyncio.Semaphore(self.settings.api_max_concurrency)
         self.stats = {"cache": 0, "ton_dns": 0, "getgems": 0, "tx_history": 0, "pending": 0}
+        self._dead_until: dict[str, float] = {}  # шаг каскада -> до какого момента пропускаем (API мёртв/закрыт)
+
+    def _skip(self, step: str) -> bool:
+        return time.monotonic() < self._dead_until.get(step, 0.0)
+
+    def _mark_dead(self, step: str, exc: BaseException) -> None:
+        """Постоянная ошибка (HTTP 4xx): не долбим источник на каждом событии — пауза 10 минут."""
+        if isinstance(exc, PermanentError):
+            self._dead_until[step] = time.monotonic() + 600
+            logger.info(f"[resolver] шаг {step} недоступен ({str(exc)[:80]}…) — пропускаю 10 минут")
 
     async def resolve(self, ton_address: str) -> dict[str, Any]:
         """
@@ -117,6 +129,8 @@ class OwnerResolver:
 
     async def _check_ton_dns(self, ton_address: str) -> str | None:
         """Проверяем TON DNS: домен вида username.ton -> username."""
+        if not self.settings.tonviewer_enabled or self._skip("ton_dns"):
+            return None  # API Tonviewer закрыт (TONVIEWER_ENABLED=false) — шаг пропускаем
         url = f"{TONVIEWER_API}/accounts/{ton_address}/dns"
         headers = {}
         if self.settings.tonviewer_api_key:
@@ -133,11 +147,14 @@ class OwnerResolver:
                 if isinstance(domain, str) and domain.endswith(".ton"):
                     return domain[:-4]  # убираем ".ton"
         except Exception as exc:  # noqa: BLE001
+            self._mark_dead("ton_dns", exc)
             logger.debug(f"TON DNS для {ton_address[:12]}…: {exc!r}")
         return None
 
     async def _check_getgems(self, ton_address: str) -> str | None:
         """Проверяем GetGems профиль: socialLinks с t.me/username."""
+        if self._skip("getgems"):
+            return None
         try:
             raw = await _http_request(
                 self._rate, "POST", GETGEMS_API,
@@ -152,6 +169,7 @@ class OwnerResolver:
                 if m:
                     return m.group(1)
         except Exception as exc:  # noqa: BLE001
+            self._mark_dead("getgems", exc)
             logger.debug(f"GetGems profile для {ton_address[:12]}…: {exc!r}")
         return None
 
@@ -161,6 +179,8 @@ class OwnerResolver:
 
         В comment транзакции часто лежит user_id Telegram.
         """
+        if not self.settings.tonviewer_enabled or self._skip("tx_history"):
+            return None
         url = f"{TONVIEWER_API}/accounts/{ton_address}/transactions"
         params = {"limit": "50"}
         headers = {}
@@ -182,6 +202,7 @@ class OwnerResolver:
                 if m:
                     return int(m.group(1))
         except Exception as exc:  # noqa: BLE001
+            self._mark_dead("tx_history", exc)
             logger.debug(f"TX history для {ton_address[:12]}…: {exc!r}")
         return None
 
