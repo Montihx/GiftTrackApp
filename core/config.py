@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     # -> «ЛИСТИНГ» / «GIFT SOLD!» за секунды, без полного скана. Квоту почти не тратит.
     tonapi_stream_enabled: bool = Field(default=True)
     tonapi_stream_delay: float = Field(default=2.0, ge=0)
+    tonapi_stream_recheck: float = Field(default=8.0, ge=0)  # повтор, если индексатор не успел; 0 — выкл
     # Полный скан (floors/атрибуты/страховка): коллекции без фильтров и избранного пользователей
     # сканируются раз в cold_every циклов, «горячие» — каждый цикл.
     tonapi_cold_every: int = Field(default=3, ge=1)

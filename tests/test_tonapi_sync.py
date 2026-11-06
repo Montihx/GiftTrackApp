@@ -400,3 +400,29 @@ async def test_hot_collections_scanned_every_cycle_cold_every_nth(session: Any) 
     for _ in range(4):
         await sync.process_collections()
     assert seen == ["Hot", "Cold", "Hot", "Hot", "Hot", "Cold"]
+
+
+async def test_stream_rechecks_unindexed_item_once(session: Any) -> None:
+    import asyncio
+
+    from services.tonapi_stream import TonApiStream
+
+    _coll, redis, _client, sync = await _ready_collection(session)
+    calls = {"n": 0}
+
+    class Client(FakeClient):
+        async def fetch_nft(self, address: str) -> dict[str, Any]:
+            calls["n"] += 1
+            if calls["n"] == 1:  # индексатор не успел: владелец — контракт, sale нет
+                item = raw_item("0:b", 2, "0:salecontract")
+                item["owner"]["is_wallet"] = False
+                return _api_nft(item)
+            return _api_nft(raw_item("0:b", 2, "0:o2", price=33))
+
+    sync.client = Client()  # type: ignore[assignment]
+    stream = TonApiStream(sync, Settings(tonapi_key="k", tonapi_stream_delay=0, tonapi_stream_recheck=0.01))
+    await stream.process_one("0:b")
+    assert redis.events(STREAM_NFT_LISTINGS) == []
+    await asyncio.gather(*list(stream._rechecks))
+    assert calls["n"] == 2 and stream.stats["rechecked"] == 1
+    assert [e["price_ton"] for e in redis.events(STREAM_NFT_LISTINGS)] == [33.0]
