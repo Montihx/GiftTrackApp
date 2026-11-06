@@ -34,12 +34,22 @@ class CryptoBotClient:
     def __init__(self, token: str) -> None:
         self.token = token
 
-    async def create_invoice(self, amount: float, payload: str, description: str = "") -> dict[str, Any]:
-        """Создать инвойс; возвращает result с pay_url."""
+    async def create_invoice(
+        self, amount: float, payload: str, description: str = "", fiat: str | None = None
+    ) -> dict[str, Any]:
+        """Создать инвойс; возвращает result с pay_url.
+
+        fiat="USD" -> сумма в долларах, оплата в TON/USDT по курсу CryptoBot;
+        без fiat — прежнее поведение (amount в TON).
+        """
 
         async def _do() -> dict[str, Any]:
             headers = {"Crypto-Pay-API-Token": self.token}
-            body = {"asset": "TON", "amount": str(amount), "payload": payload, "description": description}
+            body: dict[str, Any] = {"amount": str(amount), "payload": payload, "description": description}
+            if fiat:
+                body.update({"currency_type": "fiat", "fiat": fiat, "accepted_assets": "TON,USDT"})
+            else:
+                body["asset"] = "TON"
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as sess:
                 async with sess.post(f"{CRYPTOBOT_API}/createInvoice", json=body, headers=headers) as resp:
                     data = orjson.loads(await resp.read())
@@ -83,3 +93,15 @@ async def activate_subscription(session: AsyncSession, tg_id: int, days: int) ->
     logger.info(f"Подписка выдана: user {tg_id} до {new_expiry.isoformat()}")
     return new_expiry
 
+
+
+def parse_invoice_payload(raw: str, allowed_days: set[int], default_days: int) -> tuple[int, int] | None:
+    """payload инвойса -> (tg_id, days). Форматы: "<tg_id>" (старый) и "<tg_id>:<days>"."""
+    head, _, tail = (raw or "").partition(":")
+    if not head.isdigit():
+        return None
+    if not tail:
+        return int(head), default_days
+    if tail.isdigit() and int(tail) in allowed_days:
+        return int(head), int(tail)
+    return None
