@@ -16,10 +16,9 @@ Redis 7 · React 18 + Vite (TWA) · Docker Compose · Nginx · CryptoBot API
 | `postgres`, `redis` | — | хранилище и очереди |
 | `migrate` | `alembic upgrade head` | миграции БД (одноразово перед стартом) |
 | `bot` | `python -m bot.bot_main` | Aiogram (polling) + рассылка уведомлений |
-| `listener-ton` | `python -m bot.listener_main` | события mint из Tonviewer (выключен по умолчанию, `TONVIEWER_ENABLED`) |
-| `listener-market` | `python -m bot.market_main` | TonAPI-синхронизация (с ключом) или листинги GetGems (без ключа) |
+| `listener-market` | `python -m bot.market_main` | скан TonAPI (флоры, количество, атрибуты; продажи) — нужен `TONAPI_KEY` |
 | `resolver` | `python -m bot.resolver_main` | фоновый Telethon-воркер (опционально) |
-| `updater` | `python -m services.updater` | seed-каталог и метаданные коллекций; без ключа TonAPI — floors/продажи через GetGems |
+| `updater` | `python -m services.updater` | seed-каталог и метаданные коллекций |
 | `twa-api` | `uvicorn api.main:app` | REST + SSE для TWA, вебхук оплаты |
 | `twa-frontend` | nginx со статикой Vite | интерфейс TWA |
 | `nginx` | — | reverse proxy на портах 80/443 |
@@ -30,7 +29,7 @@ Redis 7 · React 18 + Vite (TWA) · Docker Compose · Nginx · CryptoBot API
 core/       config, logging, redis, retry, graceful shutdown, ton_address
 db/         модели SQLAlchemy 2.0, Alembic-миграции (0001–0005), seed/gift_collections.json
 bot/        точки входа сервисов (bot/*_main.py), handlers, admin-команды
-services/   tonapi + tonapi_sync + tonapi_stream + gift_discovery (TonAPI), market/ (GetGems), ton/ (Tonviewer), updater, floors,
+services/   tonapi + tonapi_sync + tonapi_stream + gift_discovery (TonAPI), market/ (цикл скана), updater, floors,
             seed, showcase, dispatcher, resolver/, telegram_market, owner_lookup, payments, collection_discovery
 api/        FastAPI: витрина (/api/collections, /api/items, /api/favorites, /api/subscription),
             фильтры (/api/filters), SSE, вебхук /api/payments/webhook/<secret>
@@ -210,7 +209,7 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 «АПГРЕЙД» отправляется, когда в коллекции после первого прохода скана появился новый предмет: для коллекций с
 фильтрами скан идёт каждый цикл, поэтому задержка — секунды-минуты (большие коллекции — дольше). Пачка новых
 предметов больше `UPGRADE_BURST_MAX` (20) за раз не рассылается (это сбой состояния, а не апгрейды).
-Источник mint-событий Tonviewer (`listener-ton`) отключён: его API недоступен.
+Сервис `listener-ton` (Tonviewer) удалён: его API недоступен.
 
 **Другие маркетплейсы.** Листинги on-chain маркетов (GetGems, Marketapp и др.) TonAPI отдаёт сам,
 имя маркета берётся из `sale.market.name`. Portals, Tonnel и MRKT публичного API не имеют: их
@@ -222,7 +221,7 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 
 | Переменная | По умолчанию | Назначение |
 |---|---|---|
-| `TONAPI_KEY` | пусто | ключ tonconsole.com; пусто → seed-каталог + GetGems |
+| `TONAPI_KEY` | пусто | ключ tonconsole.com; пусто → только seed-каталог (скан блокчейна выключен) |
 | `TONAPI_POLL_INTERVAL` | 15 | пауза между циклами TonAPI-синхронизации, с |
 | `TONAPI_RPS` | 0.8 | лимит запросов к TonAPI на процесс (free-тариф — 1 RPS; ровно 1.0 даёт частые 429) |
 | `TONAPI_PAGES_PER_CYCLE` | 3 | страниц по 1000 items на коллекцию за цикл |
@@ -233,7 +232,6 @@ NFT — 100+ коллекций). Новая коллекция добавляе
 | `TONAPI_DISCOVERY_ENABLED` | true | автодобавление новых коллекций Telegram Gifts |
 | `TONAPI_DISCOVERY_INTERVAL` | 3600 | период автообнаружения, с |
 | `TONAPI_DISCOVERY_PAGES` | 5 | страниц NFT минтера за один запуск автообнаружения |
-| `TONVIEWER_ENABLED` | false | включить `listener-ton` (Tonviewer API сейчас недоступен) |
 | `OWNER_LOOKUP_ENABLED` | true | поиск владельца подарка по slug через Telegram (нужен вход Telethon) |
 | `OWNER_LOOKUP_TIMEOUT` | 4 | сколько уведомление ждёт владельца, с |
 | `UPGRADE_BURST_MAX` | 20 | больше новых предметов за раз — апгрейды не рассылаются |
@@ -283,7 +281,6 @@ cd frontend && npm install && npm run dev   # /api проксируется на
   ложных «GIFT SOLD!»).
 - Portals, Tonnel, MRKT не подключены (нет публичного API, см. «Источники данных»).
 - Продажи на маркете Telegram не отслеживаются (листинг исчезает и при продаже, и при снятии — различить нельзя).
-- `listener-ton` выключен по умолчанию: API Tonviewer недоступен.
 - Отличия от ТЗ: фронтенд на JavaScript (JSX), а не TypeScript.
 
 ## Данные маркета Telegram

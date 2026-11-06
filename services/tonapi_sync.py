@@ -480,7 +480,7 @@ class TonApiSync:
                     current_owner_ton=item.owner))
                 if item.owner:
                     s.add(NftOwnershipHistory(nft_address=item.address, owner_ton=item.owner, acquired_at=now))
-            else:  # запись от старого listener-ton без коллекции/трейтов — дополняем
+            else:  # запись без коллекции/трейтов (создана до скана) — дополняем
                 nft.collection_id = coll_id
                 nft.nft_index = item.index
                 nft.model, nft.background = item.attrs.get("model"), item.attrs.get("background")

@@ -109,9 +109,6 @@ class Settings(BaseSettings):
     # --- Внешние API ---
     getgems_ws_url: str = Field(default="wss://api.getgems.io/graphql")
     getgems_api_url: str = Field(default="https://api.getgems.io/graphql")
-    tonviewer_api_key: str = Field(default="")
-    # Tonviewer (listener-ton) выключен по умолчанию: API недоступен (404). Включить: TONVIEWER_ENABLED=true
-    tonviewer_enabled: bool = Field(default=False)
     # TonAPI (tonconsole.com). Ключ есть -> TonAPI primary; нет -> seed-каталог + GetGems fallback
     tonapi_key: str = Field(default="")
     tonapi_url: str = Field(default="https://tonapi.io")
@@ -163,14 +160,6 @@ class Settings(BaseSettings):
     )
     ipfs_gateway: str = Field(default="https://ipfs.io/ipfs/")
 
-    # --- TON Listener (ЭТАП 3) ---
-    ton_poll_interval: float = Field(
-        default=3.0, description="Интервал поллинга Tonviewer API в секундах"
-    )
-    # --- Market Listener (ЭТАП 4) ---
-    market_poll_interval: float = Field(
-        default=5.0, description="Интервал поллинга маркетплейсов в секундах"
-    )
 
     # --- Rarity counts (ЭТАП 6.5) ---
     counts_update_interval: float = Field(
