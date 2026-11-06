@@ -58,9 +58,6 @@ class Settings(BaseSettings):
     # TonAPI (tonconsole.com). Ключ есть -> TonAPI primary; нет -> seed-каталог + GetGems fallback
     tonapi_key: str = Field(default="")
     tonapi_url: str = Field(default="https://tonapi.io")
-    # У TonAPI нет эндпоинта floor: считаем min(sale.price) по items коллекции.
-    # Если items больше лимита — floor НЕ пишем (частичный скан даёт неверную цену).
-    tonapi_floor_scan_limit: int = Field(default=3000)
     tonapi_poll_interval: float = Field(default=15.0)
     # Общий лимит запросов к TonAPI на процесс (free-тариф tonconsole — 1 RPS; на платном поднимите)
     tonapi_rps: float = Field(default=1.0)

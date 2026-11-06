@@ -1,4 +1,6 @@
-# /workspace/services/updater.py — МОДУЛЬ 5: Floor & Sales Updater (фоновые джобы)
+# services/updater.py — МОДУЛЬ 5: Floor & Sales Updater (фоновые джобы)
+# С TONAPI_KEY джобы floors/sales/counts пропускаются: их ведёт TonApiSync (listener-market);
+# updater остаётся для seed-каталога и метаданных коллекций. Ниже — режим без ключа (GetGems).
 """
 Updater — три asyncio-задачи (точка входа `python -m services.updater`):
 
@@ -60,7 +62,7 @@ from typing import Any
 
 import orjson
 from loguru import logger
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import update as pg_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,11 +70,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.config import Settings, get_settings
 from core.redis_client import cache_set_json, floor_key, recent_sales_key
 from core.retry import with_retry
-from db.models import Attribute, Collection, FloorSnapshot, ModelSale, Sale
+from db.models import Attribute, Collection, ModelSale, Sale
 from services.collection_discovery import _http_request, _to_decimal
 from services.floors import apply_collection_floor
 from services.seed import upsert_seed
-from services.tonapi import TonApiClient
 
 # ---------------------------------------------------------------------------
 # GraphQL-запросы (см. докстринг модуля с примерами ответов)
@@ -147,7 +148,6 @@ class FloorAndSalesUpdater:
         redis: Any,
         settings: Settings | None = None,
         discovery: Any | None = None,
-        tonapi: TonApiClient | None = None,
     ) -> None:
         self.session = session
         self.redis = redis
@@ -156,8 +156,8 @@ class FloorAndSalesUpdater:
         # Одна AsyncSession не поддерживает параллельные операции: все участки
         # с self.session в любой джобе идут под этим замком (сеть — вне замка).
         self._lock = asyncio.Lock()
-        # TonAPI primary при наличии ключа; без ключа — GetGems GraphQL (fallback)
-        self._tonapi = tonapi or TonApiClient(self.settings, self._rate)
+        # С TONAPI_KEY floors/продажи/атрибуты ведёт TonApiSync (listener-market); updater — только seed/meta
+        self._tonapi_mode = self.settings.tonapi_enabled
         # Ленивый импорт по атрибуту => тесты могут присвоить mock до первого вызова
         self._discovery = discovery
         # Dedupe «в полёте»: не пишем одну и ту же продажу дважды из разных циклов
@@ -168,7 +168,7 @@ class FloorAndSalesUpdater:
     # ------------------------------------------------------------------
     async def update_floors(self) -> None:
         """Общий floor коллекции + floor по каждой модели -> Redis (TTL 30s) + БД."""
-        if self._tonapi.enabled:
+        if self._tonapi_mode:
             # floors/листинги/продажи ведёт TonApiSync в listener-market — не дублируем запросы к TonAPI
             logger.debug("update_floors: TonAPI-режим, floors обновляет listener-market")
             return
@@ -188,17 +188,13 @@ class FloorAndSalesUpdater:
             cid = str(coll_uuid)
             # --- общий floor коллекции (сеть — вне замка) ---
             try:
-                if self._tonapi.enabled:
-                    floor = await self._tonapi.fetch_collection_floor(contract)
-                else:
-                    data = await self._graphql(GQL_FLOOR_PRICE, {"address": contract},
-                                               context=f"floor[{coll_name}]")
-                    fp = ((data.get("nftCollectionFloorPrice") or {}).get("amount") or {}).get("value")
-                    floor = _to_decimal(fp)
+                data = await self._graphql(GQL_FLOOR_PRICE, {"address": contract}, context=f"floor[{coll_name}]")
+                fp = ((data.get("nftCollectionFloorPrice") or {}).get("amount") or {}).get("value")
+                floor = _to_decimal(fp)
             except Exception as exc:  # noqa: BLE001 — одна коллекция не роняет цикл
                 logger.warning(f"update_floors: floor для '{coll_name}' не получен: {exc!r}")
                 continue
-            if floor is None:  # цена неизвестна (нет листингов / скан неполный) — floor остаётся как есть
+            if floor is None:  # цена неизвестна (нет листингов) — floor остаётся как есть
                 continue
 
             await cache_set_json(self.redis, floor_key(cid), float(floor), ttl=self.settings.floor_cache_ttl)
@@ -212,8 +208,6 @@ class FloorAndSalesUpdater:
                         )
                     )
                 ).all()
-            if self._tonapi.enabled:
-                models = []  # TonAPI не даёт floor по трейтам — модельные floors только через GetGems
             for attr_uuid, model_value in models:
                 try:
                     mdata = await self._graphql(
@@ -263,7 +257,7 @@ class FloorAndSalesUpdater:
           Redis recent_sales:{cid}:{model} = JSON-список (TTL 30s)
           БД model_sales — INSERT c ON CONFLICT DO NOTHING (уникальность по tx-hash ниже).
         """
-        if self._tonapi.enabled:  # в TonAPI-режиме это делает TonApiSync (listener-market)
+        if self._tonapi_mode:  # в TonAPI-режиме это делает TonApiSync (listener-market)
             return
         async with self._lock:
             rows = (
@@ -405,7 +399,7 @@ class FloorAndSalesUpdater:
         каждого трейта и пишем в attributes.items_count.
         Процент редкости = attr.items_count / collection.items_count * 100.
         """
-        if self._tonapi.enabled:  # в TonAPI-режиме это делает TonApiSync (listener-market)
+        if self._tonapi_mode:  # в TonAPI-режиме это делает TonApiSync (listener-market)
             return
         from collections import Counter
 

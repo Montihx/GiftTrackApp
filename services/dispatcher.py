@@ -67,7 +67,7 @@ from core.redis_client import (
     owner_history_key,
     recent_sales_key,
 )
-from db.models import Attribute, Filter, User
+from db.models import Attribute, Filter
 from services.resolver.resolver import OwnerResolver
 
 
@@ -362,7 +362,7 @@ class NotificationDispatcher:
             for uid in target_users
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        for uid, res in zip(target_users, results):
+        for uid, res in zip(target_users, results, strict=True):
             if isinstance(res, Exception):
                 logger.warning(f"Не удалось отправить алерт пользователю {uid}: {res!r}")
                 self.stats["errors"] += 1

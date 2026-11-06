@@ -34,7 +34,7 @@ def validate_init_data(init_data: str, secret_key: bytes, max_age: int = MAX_DAT
     try:
         parsed = dict(parse_qsl(init_data, strict_parsing=True))
     except ValueError:
-        raise HTTPException(status_code=401, detail="Malformed initData")
+        raise HTTPException(status_code=401, detail="Malformed initData") from None
 
     received_hash = parsed.pop("hash", None)
     if not received_hash:

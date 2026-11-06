@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
 from sqlalchemy import func, select
 
 from core.config import Settings

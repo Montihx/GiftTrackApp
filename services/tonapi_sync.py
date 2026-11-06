@@ -232,7 +232,7 @@ class TonApiSync:
         prev: dict[str, ItemState] = {}
         if items:
             values = await self.redis.hmget(keys["items"], [i.address for i in items])
-            for item, raw in zip(items, values):
+            for item, raw in zip(items, values, strict=True):
                 decoded = decode_state(item.address, raw)
                 if decoded is not None:
                     prev[item.address] = decoded[0]

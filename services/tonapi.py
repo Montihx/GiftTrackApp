@@ -7,8 +7,7 @@
     — нативная монета теперь называется "Gram", поэтому смотрим на currency_type, а не на имя;
   * sale.market.name — "Getgems Sales", "Marketapp Marketplace", ...;
   * limit страницы: 1000 с ключом, 100 без ключа ("anonymous tier").
-fetch_collection_items/floor — разовый полный скан (до tonapi_floor_scan_limit); основной путь —
-постраничный скан в services/tonapi_sync.py (fetch_items_page), который покрывает любые коллекции.
+Сканирование коллекций — постранично в services/tonapi_sync.py (fetch_items_page).
 Все запросы проходят через общий для процесса rate limiter (TONAPI_RPS).
 """
 from __future__ import annotations
@@ -83,11 +82,6 @@ def shared_limiter(rps: float) -> RateLimiter:
     return _LIMITERS[rps]
 
 
-def floor_from_items(items: list[dict[str, Any]]) -> Decimal | None:
-    prices = [p for it in items if (p := parse_ton_price(it.get("sale"))) is not None]
-    return min(prices) if prices else None
-
-
 class TonApiClient:
     def __init__(self, settings: Settings, rate: asyncio.Semaphore | None = None,
                  limiter: RateLimiter | None = None) -> None:
@@ -115,26 +109,6 @@ class TonApiClient:
             context=f"items[{address[:8]}…@{offset}]",
         )
         return (page or {}).get("nft_items") or []
-
-    async def fetch_collection_items(self, address: str) -> list[dict[str, Any]] | None:
-        """Все items коллекции или None, если их больше tonapi_floor_scan_limit (скан был бы неполным)."""
-        limit = self.settings.tonapi_floor_scan_limit
-        items: list[dict[str, Any]] = []
-        offset = 0
-        while True:
-            batch = await self.fetch_items_page(address, offset)
-            items.extend(batch)
-            if len(batch) < PAGE_LIMIT:
-                return items
-            offset += PAGE_LIMIT
-            if offset >= limit:
-                logger.info(f"tonapi: {address[:8]}… больше {limit} items — пропускаю")
-                return None
-
-    async def fetch_collection_floor(self, address: str) -> Decimal | None:
-        """Floor коллекции или None, если скан неполный/листингов нет."""
-        items = await self.fetch_collection_items(address)
-        return floor_from_items(items) if items is not None else None
 
     async def fetch_ton_usd(self) -> float | None:
         """Курс TON->USD (GET /v2/rates?tokens=ton&currencies=usd) или None."""
