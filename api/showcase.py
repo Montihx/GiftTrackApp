@@ -97,7 +97,8 @@ async def _tg_stats(ids: list[str]) -> dict[str, dict[str, Any]]:
 
         redis = create_redis()
         try:
-            keys = [f"tg_market:floor:{c}" for c in ids] + [f"tg_market:stats:{c}" for c in ids] + ["tg_market:rate"]
+            keys = ([f"tg_market:floor:{c}" for c in ids] + [f"tg_market:stats:{c}" for c in ids] + ["tg_market:rate"]
+                    + [f"market_floor:{s}:{c}" for s in ("mrkt", "portals") for c in ids])
             raw = await redis.mget(keys)
         finally:
             await redis.aclose()
@@ -109,7 +110,8 @@ async def _tg_stats(ids: list[str]) -> dict[str, dict[str, Any]]:
                 return None
 
         n = len(ids)
-        rate_global = load(raw[-1])
+        rate_global = load(raw[2 * n])
+        mkt = {s: raw[2 * n + 1 + k * n: 2 * n + 1 + (k + 1) * n] for k, s in enumerate(("mrkt", "portals"))}
         out: dict[str, dict[str, Any]] = {}
         for i, cid in enumerate(ids):
             floor, stats = load(raw[i]) or {}, load(raw[n + i]) or {}
@@ -120,6 +122,7 @@ async def _tg_stats(ids: list[str]) -> dict[str, dict[str, Any]]:
                 "tg_listed": floor.get("listed") if floor.get("listed") is not None else stats.get("listed"),
                 "tg_floor_stars": min_stars,
                 "tg_floor_price": round(min_stars * rate, 2) if min_stars and rate else None,
+                "market_floors": {s: p for s in mkt if (p := (load(mkt[s][i]) or {}).get("price"))},
             }
         return out
     except Exception as exc:  # noqa: BLE001
@@ -135,9 +138,14 @@ def _apply_tg(item: dict[str, Any], tg: dict[str, Any] | None) -> None:
     show = get_settings().tg_floor_show
     item["tg_floor_stars"] = tg.get("tg_floor_stars") if show else None
     item["tg_floor_price"] = tg.get("tg_floor_price") if show else None
-    # основной флор — всегда ончейн; телеграмный только справочно (TG_FLOOR_SHOW=true)
-    item["best_floor"] = item.get("floor_price") or None
-    item["best_floor_source"] = "onchain" if item["best_floor"] else None
+    # флоры сторонних маркетов (MRKT, Portals); флор Telegram сюда не входит (TG_FLOOR_SHOW — только справочно)
+    markets = tg.get("market_floors") or {}
+    item["market_floors"] = markets
+    cands = {"onchain": item.get("floor_price"), **markets}
+    cands = {k: v for k, v in cands.items() if v}
+    best = min(cands, key=cands.get) if cands else None
+    item["best_floor"] = cands[best] if best else None
+    item["best_floor_source"] = best
 
 
 _LIST_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}

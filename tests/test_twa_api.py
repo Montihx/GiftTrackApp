@@ -207,6 +207,8 @@ async def test_tg_stats_reads_redis_keys(monkeypatch):
         "tg_market:rate": orjson.dumps(0.0100),
         "tg_market:stats:c2": orjson.dumps({"issued": 100}),
         "tg_market:floor:c2": orjson.dumps({"min_stars": 5000, "listed": None}),
+        "market_floor:mrkt:c1": orjson.dumps({"price": 90.5, "ts": 1}),
+        "market_floor:portals:c2": orjson.dumps({"price": 40.0, "ts": 1}),
     }
 
     class FakeRedis:
@@ -220,5 +222,18 @@ async def test_tg_stats_reads_redis_keys(monkeypatch):
 
     monkeypatch.setattr(rc, "create_redis", lambda: FakeRedis())
     out = await showcase_module._tg_stats(["c1", "c2"])
-    assert out["c1"] == {"issued_count": 2825, "tg_listed": 33, "tg_floor_stars": 10000, "tg_floor_price": 136.0}
+    assert out["c1"] == {"issued_count": 2825, "tg_listed": 33, "tg_floor_stars": 10000, "tg_floor_price": 136.0,
+                     "market_floors": {"mrkt": 90.5}}
+    assert out["c2"]["market_floors"] == {"portals": 40.0}
     assert out["c2"]["tg_floor_price"] == 50.0 and out["c2"]["tg_listed"] is None  # курс — общий, если нет своего
+
+
+def test_apply_tg_best_floor_is_min_over_onchain_and_markets() -> None:
+    from api.showcase import _apply_tg
+
+    item = {"floor_price": 280.0}
+    _apply_tg(item, {"market_floors": {"mrkt": 15.0, "portals": 300.0}})
+    assert item["best_floor"] == 15.0 and item["best_floor_source"] == "mrkt"
+    only = {"floor_price": 20.0}
+    _apply_tg(only, {"market_floors": {"portals": 30.0}})
+    assert only["best_floor"] == 20.0 and only["best_floor_source"] == "onchain"
