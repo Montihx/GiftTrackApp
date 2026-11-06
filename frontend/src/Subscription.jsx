@@ -7,6 +7,7 @@ const OWNER = import.meta.env.VITE_OWNER_USERNAME || "";
 
 const BENEFITS = [
   { icon: "⚡", title: "Уведомления по фильтрам", text: "Листинги, подходящие под ваши фильтры, приходят в бот" },
+  { icon: "💸", title: "Продажи и флоры", text: "GIFT SOLD!, флор подарка и модели, последние продажи" },
   { icon: "🔎", title: "Точный поиск владельца", text: "Показываем ссылку на владельца подарка" },
 ];
 
@@ -63,7 +64,7 @@ export default function Subscription() {
         <h1>Подписка</h1>
         <p>Премиум-доступ к уведомлениям и данным о владельцах подарков.</p>
         <div className="sub-status">
-          {sub.is_active ? `Premium активен до ${expires}` : "Подписка не активна"}
+          {sub.is_active ? `Premium активен до ${expires} · продление добавит дни к текущему сроку` : "Подписка не активна"}
         </div>
       </div>
 
@@ -91,7 +92,7 @@ export default function Subscription() {
 
       {msg && <div className="toast" style={{ marginTop: 10 }}>{msg}</div>}
       <button className="btn gold block" style={{ marginTop: 12 }} onClick={pay} disabled={busy}>
-        {busy ? "Создаём счёт…" : sub.is_active ? "Продлить" : "Оформить"}
+        {busy ? "Создаём счёт…" : "Продолжить"}
       </button>
 
       {OWNER && (

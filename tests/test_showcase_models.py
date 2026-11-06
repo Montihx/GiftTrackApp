@@ -97,3 +97,19 @@ def test_migration_0002_chain() -> None:
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     assert mod.revision == "0002" and mod.down_revision == "0001"
     assert callable(mod.upgrade) and callable(mod.downgrade)
+
+async def test_favorite_items_enriched_with_name_and_model(session) -> None:
+    from db.models import Collection, Favorite, ProcessedNft, User
+    from services.showcase import list_favorites
+
+    session.add(User(tg_id=9001))
+    coll = Collection(name="Plush Pepe", contract_address="EQfav_enrich", source="seed", icon_url="https://x/i.webp")
+    session.add(coll)
+    await session.flush()
+    session.add(ProcessedNft(nft_address="0:fav", collection_id=coll.id, nft_index=2, model="Hothead"))
+    session.add_all([Favorite(user_id=9001, item_address="0:fav"), Favorite(user_id=9001, item_address="0:unknown")])
+    await session.commit()
+    items = {i["item_address"]: i for i in (await list_favorites(session, 9001))["items"]}
+    assert items["0:fav"]["name"] == "Plush Pepe #2" and items["0:fav"]["model"] == "Hothead"
+    assert items["0:fav"]["icon_url"] == "https://x/i.webp"
+    assert items["0:unknown"]["name"] is None

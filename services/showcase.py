@@ -100,6 +100,7 @@ def _attr_dict(a: Attribute, total: int | None) -> dict[str, Any]:
         "icon_url": a.icon_url,
         "count": a.items_count,
         "rarity": rarity_pct(a.items_count, total),
+        "floor": _f(a.floor_price) if a.floor_price else None,  # 0 в схеме = «нет floor»
     }
 
 
@@ -299,7 +300,28 @@ async def list_favorites(session: AsyncSession, user_id: int) -> dict[str, Any]:
             )
         elif f.item_address:
             items.append({"item_address": f.item_address})
+    await _enrich_favorite_items(session, items)
     return {"collections": collections, "items": items}
+
+
+async def _enrich_favorite_items(session: AsyncSession, items: list[dict[str, Any]]) -> None:
+    """Имя «<коллекция> #<номер>», модель и иконка — вместо голого адреса в «Избранном»."""
+    if not items:
+        return
+    rows = (
+        await session.execute(
+            select(ProcessedNft, Collection)
+            .join(Collection, Collection.id == ProcessedNft.collection_id, isouter=True)
+            .where(ProcessedNft.nft_address.in_([i["item_address"] for i in items]))
+        )
+    ).all()
+    by_addr = {nft.nft_address: (nft, coll) for nft, coll in rows}
+    for i in items:
+        nft, coll = by_addr.get(i["item_address"], (None, None))
+        i["name"] = f"{coll.name} #{nft.nft_index}" if nft is not None and coll is not None else None
+        i["model"] = nft.model if nft is not None else None
+        i["icon_url"] = coll.icon_url if coll is not None else None
+        i["collection_name"] = coll.name if coll is not None else None
 
 
 async def add_favorite(
