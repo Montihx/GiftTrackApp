@@ -85,8 +85,13 @@ def has_owner(item: dict[str, Any]) -> bool:
 
 
 def seen_key(item: dict[str, Any]) -> str:
-    """Слаг + цена: перевыставление по другой цене — новый листинг."""
-    return f"{item['slug']}|{item['price_stars']}|{item['price_ton']}"
+    """Слаг + БАЗОВАЯ цена: перевыставление по другой цене — новый листинг.
+
+    Цена в TON у листинга за Stars — пересчёт по текущему курсу и «плавает», поэтому сравниваем по
+    Stars; по TON — только для листингов, выставленных за TON (resell_ton_only).
+    """
+    base = item["price_stars"] if item["price_stars"] is not None else item["price_ton"]
+    return f"{item['slug']}|{base}"
 
 
 class TelegramMarketWatcher:
@@ -181,6 +186,12 @@ class TelegramMarketWatcher:
             await self.redis.sadd(key, seen_key(i))
         await self.redis.expire(key, STATE_TTL)
         if bootstrap:
+            return 0
+        if len(new) > self.settings.tg_market_max_new:
+            # Реальных новых листингов за один опрос (~минуты) бывает единицы. Десятки — это сбой дедупликации
+            # (смена курса, сброс Redis, другая сортировка): не рассылаем, состояние уже обновлено.
+            logger.warning(f"[tg_market] {self.collections[cid][0]}: {len(new)} «новых» за опрос — пропускаю (предохранитель)")
+            self.stats["suppressed"] = self.stats.get("suppressed", 0) + len(new)
             return 0
         name, address = self.collections[cid]
         # В общем списке Telegram не всегда отдаёт владельца — дозапрашиваем подарок по slug (только новые)
