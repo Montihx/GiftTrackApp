@@ -38,8 +38,10 @@ from core.config import Settings
 from core.redis_client import (
     STREAM_NFT_LISTINGS,
     STREAM_NFT_SALES,
+    cache_get_json,
     cache_set_json,
     floor_key,
+    recent_sales_key,
     stream_publish,
 )
 from db.models import Attribute, Collection, NftOwnershipHistory, ProcessedNft, Sale
@@ -52,6 +54,9 @@ CURSOR_KEY = "tonapi_sync:{cid}:cursor"  # offset следующей стран�
 PASS_KEY = "tonapi_sync:{cid}:pass"      # номер текущего прохода
 READY_KEY = "tonapi_sync:{cid}:ready"    # первый полный проход завершён -> публикуем события
 STATE_TTL = 7 * 86400
+RATE_KEY = "rate:ton_usd"
+RATE_TTL = 300
+RECENT_SALES_LIMIT = 10
 TRAIT_MAP = {"model": "model", "backdrop": "background", "background": "background",
              "symbol": "symbol", "pattern": "pattern"}
 MINTER_NAMES = {"fragment gift minter"}
@@ -279,18 +284,44 @@ class TonApiSync:
             )
             payload = listing_to_stream_payload(event)
             payload["collection_id"] = cid
+            payload["nft_name"] = item.name
             await stream_publish(self.redis, STREAM_NFT_LISTINGS, payload)
+        ton_usd = await self._ton_usd() if diff.sales else None
         for item, price, prev in diff.sales:
-            await stream_publish(self.redis, STREAM_NFT_SALES, {
+            attrs = dict(item.attrs or prev.attrs)
+            sale = {
                 "type": "sale", "collection_id": cid, "collection_name": name,
                 "collection_address": address, "nft_address": item.address, "nft_index": item.index,
-                "nft_name": item.name, "price_ton": float(price), "marketplace": prev.market,
-                "seller_ton": prev.owner or "", "buyer_ton": item.owner or "",
-                "attributes": dict(item.attrs or prev.attrs), "sold_at": now.isoformat(),
-            })
+                "nft_name": item.name, "price_ton": float(price),
+                "price_usd": round(float(price) * ton_usd, 2) if ton_usd else None,
+                "marketplace": prev.market, "seller_ton": prev.owner or "", "buyer_ton": item.owner or "",
+                "attributes": attrs, "sold_at": now.isoformat(),
+            }
+            await stream_publish(self.redis, STREAM_NFT_SALES, sale)
+            if attrs.get("model"):
+                await self._push_recent_sale(cid, attrs["model"], sale)
         self.stats["listings"] += len(diff.listings)
         self.stats["sales"] += len(diff.sales)
         self.stats["transfers"] += len(diff.transfers)
+
+    async def _ton_usd(self) -> float | None:
+        cached = await cache_get_json(self.redis, RATE_KEY)
+        if isinstance(cached, (int, float)) and cached > 0:
+            return float(cached)
+        fetch = getattr(self.client, "fetch_ton_usd", None)
+        rate = await fetch() if fetch is not None else None
+        if rate:
+            await cache_set_json(self.redis, RATE_KEY, rate, ttl=RATE_TTL)
+        return rate
+
+    async def _push_recent_sale(self, cid: str, model: str, sale: dict[str, Any]) -> None:
+        """recent_sales:{cid}:{model} — для блока «Последние продажи модели» в уведомлении ЛИСТИНГ."""
+        key = recent_sales_key(cid, model)
+        current = await cache_get_json(self.redis, key)
+        entry = {"nft_index": sale["nft_index"], "price": sale["price_ton"],
+                 "marketplace": sale["marketplace"], "sold_at": sale["sold_at"]}
+        items = [entry] + (current if isinstance(current, list) else [])
+        await cache_set_json(self.redis, key, items[:RECENT_SALES_LIMIT], ttl=STATE_TTL)
 
     async def _persist_chunk(self, coll_id: uuid.UUID, diff: SyncDiff, now: dt.datetime) -> None:
         s = self.session

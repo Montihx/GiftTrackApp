@@ -32,6 +32,16 @@ Dispatcher: слушает Redis Streams (nft_upgrades, nft_listings), соби�
     Последние продажи модели:
     #8681 - 3503.0 TON - GetGems - 1 день назад
     #3343 - 3433.0 TON - GetGems - 1 день назад
+
+Формат сообщения для ПРОДАЖИ (stream nft_sales, TonAPI-sync):
+    💸 GIFT SOLD!
+    🎁 Plush Pepe #2675
+    Model: Amalgam
+    Backdrop: Dark Lilac
+    Symbol: Wolf Rage
+
+    💰 Price: 2500 TON (≈ $2 727)
+    🏪 Sold on GetGems
 """
 from __future__ import annotations
 
@@ -50,6 +60,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.config import Settings, get_settings
 from core.redis_client import (
     STREAM_NFT_LISTINGS,
+    STREAM_NFT_SALES,
     STREAM_NFT_UPGRADES,
     cache_get_json,
     floor_key,
@@ -58,6 +69,47 @@ from core.redis_client import (
 )
 from db.models import Attribute, Filter, User
 from services.resolver.resolver import OwnerResolver
+
+
+MARKET_TITLES = {
+    "getgems": "GetGems", "marketapp": "Marketapp", "fragment": "Fragment", "portals": "Portals",
+    "tonnel": "Tonnel", "mrkt": "MRKT", "xgift": "XGift", "tonapi": "TON",
+}
+
+
+def market_title(slug: str | None) -> str:
+    return MARKET_TITLES.get((slug or "").lower(), slug or "?")
+
+
+def _fmt_num(value: float) -> str:
+    """2727.5 -> '2 727.5', 5.0 -> '5'."""
+    text = f"{value:,.2f}".rstrip("0").rstrip(".")
+    return text.replace(",", " ")
+
+
+def _parse_uuid(raw: Any) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(raw)) if raw else None
+    except (ValueError, AttributeError):
+        return None
+
+
+def format_sale_message(payload: dict[str, Any]) -> str:
+    """Текст уведомления «GIFT SOLD!» по событию из STREAM_NFT_SALES."""
+    attrs = payload.get("attributes") or {}
+    name = payload.get("nft_name") or f"{payload.get('collection_name') or 'Gift'} #{payload.get('nft_index', '?')}"
+    addr = payload.get("nft_address", "")
+    lines = ["💸 <b>GIFT SOLD!</b>", f"🎁 <a href='https://getgems.io/nft/{addr}'><b>{name}</b></a>"]
+    for key, label in (("model", "Model"), ("background", "Backdrop"), ("symbol", "Symbol")):
+        if attrs.get(key):
+            lines.append(f"{label}: {attrs[key]}")
+    lines.append("")
+    price = float(payload.get("price_ton") or 0)
+    usd = payload.get("price_usd")
+    usd_part = f" (≈ ${_fmt_num(float(usd))})" if usd else ""
+    lines.append(f"💰 Price: <b>{_fmt_num(price)} TON</b>{usd_part}")
+    lines.append(f"🏪 Sold on {market_title(payload.get('marketplace'))}")
+    return "\n".join(lines)
 
 
 def _format_time_ago(ts: dt.datetime | None) -> str:
@@ -99,7 +151,7 @@ class NotificationDispatcher:
         self.redis = redis
         self.resolver = resolver
         self.settings = settings or get_settings()
-        self.stats = {"upgrades": 0, "listings": 0, "sent": 0, "errors": 0}
+        self.stats = {"upgrades": 0, "listings": 0, "sales": 0, "sent": 0, "errors": 0}
 
     async def process_upgrade(self, payload: dict[str, Any]) -> None:
         """Обработка события апгрейда (mint)."""
@@ -180,9 +232,10 @@ class NotificationDispatcher:
 
         # Формируем сообщение
         lines = ["✅ <b>ЛИСТИНГ</b>"]
+        title = payload.get("nft_name") or f"#{payload.get('nft_index', '?')}"
         lines.append(
             f"🎭 <a href='https://getgems.io/nft/{nft_address}'>"
-            f"{payload.get('nft_index', '?')}</a> на {marketplace}"
+            f"{title}</a> на {market_title(marketplace)}"
         )
         lines.append(f"💰 <b>{price} TON</b>")
         if attributes.get("model"):
@@ -229,7 +282,7 @@ class NotificationDispatcher:
                         pass
                 lines.append(
                     f"#{s.get('nft_index', '?')} - {s.get('price', '?')} TON - "
-                    f"{s.get('marketplace', '?')} - {_format_time_ago(sold_dt)}"
+                    f"{market_title(s.get('marketplace'))} - {_format_time_ago(sold_dt)}"
                 )
 
         text = "\n".join(lines)
@@ -238,6 +291,13 @@ class NotificationDispatcher:
         await self._send_to_subscribers(collection_id, attributes, text, keyboard)
         self.stats["listings"] += 1
 
+
+    async def process_sale(self, payload: dict[str, Any]) -> None:
+        """Обработка события продажи -> «GIFT SOLD!» подписчикам коллекции/модели."""
+        collection_id = _parse_uuid(payload.get("collection_id"))
+        text = format_sale_message(payload)
+        await self._send_to_subscribers(collection_id, payload.get("attributes") or {}, text, None)
+        self.stats["sales"] += 1
 
     async def _send_to_subscribers(
         self,
@@ -366,7 +426,7 @@ class NotificationDispatcher:
     async def run_loop(self, stop_event: asyncio.Event) -> None:
         """Основной цикл: читает Redis Streams и обрабатывает события."""
         logger.info("[dispatcher] старт")
-        last_ids = {STREAM_NFT_UPGRADES: "$", STREAM_NFT_LISTINGS: "$"}
+        last_ids = {STREAM_NFT_UPGRADES: "$", STREAM_NFT_LISTINGS: "$", STREAM_NFT_SALES: "$"}
 
         while not stop_event.is_set():
             try:
@@ -388,6 +448,8 @@ class NotificationDispatcher:
                             await self.process_upgrade(payload)
                         elif stream_name == STREAM_NFT_LISTINGS:
                             await self.process_listing(payload)
+                        elif stream_name == STREAM_NFT_SALES:
+                            await self.process_sale(payload)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001

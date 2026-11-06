@@ -152,6 +152,9 @@ class FakeClient:
         self.items: list[dict[str, Any]] = []
         self.calls: list[int] = []
 
+    async def fetch_ton_usd(self) -> float | None:
+        return 2.0
+
     async def fetch_items_page(self, address: str, offset: int, limit: int = 1000) -> list[dict[str, Any]]:
         self.calls.append(offset)
         return self.items[offset:offset + limit]
@@ -208,6 +211,9 @@ async def test_bootstrap_then_sale_and_listing(session: Any) -> None:
     assert sold[0]["seller_ton"] == "0:o1" and sold[0]["buyer_ton"] == "0:buyer"
     assert sold[0]["marketplace"] == "getgems" and sold[0]["nft_name"] == "Teddy #1"
     assert sold[0]["attributes"]["model"] == "Obelisk" and sold[0]["collection_name"] == "Teddy"
+    assert sold[0]["price_usd"] == 10.0
+    recent = orjson.loads(redis.kv[f"recent_sales:{cid}:Obelisk"])
+    assert recent[0]["nft_index"] == 1 and recent[0]["price"] == 5.0 and recent[0]["marketplace"] == "getgems"
     await session.refresh(coll)
     assert Decimal(str(coll.floor_price)) == Decimal("7")
     assert (await session.execute(select(func.count()).select_from(FloorSnapshot))).scalar_one() == 2

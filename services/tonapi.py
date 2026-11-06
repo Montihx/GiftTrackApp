@@ -136,6 +136,16 @@ class TonApiClient:
         items = await self.fetch_collection_items(address)
         return floor_from_items(items) if items is not None else None
 
+    async def fetch_ton_usd(self) -> float | None:
+        """Курс TON->USD (GET /v2/rates?tokens=ton&currencies=usd) или None."""
+        try:
+            data = await self._get("/v2/rates", params={"tokens": "ton", "currencies": "usd"}, context="rates")
+            value = float(((data or {}).get("rates") or {})["TON"]["prices"]["USD"])
+        except Exception as exc:  # noqa: BLE001 — курс необязателен (≈USD просто не покажем)
+            logger.debug(f"tonapi rates: {exc!r}")
+            return None
+        return value if value > 0 else None
+
     async def fetch_item_sale_price(self, item_address: str) -> Decimal | None:
         """Цена активного листинга NFT (GET /v2/nfts/{address}) или None."""
         if not self.enabled:

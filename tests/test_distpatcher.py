@@ -185,3 +185,43 @@ async def test_rarity_lines(session):
     assert any("0.6%" in l for l in lines)
 
 
+
+
+def test_format_sale_message() -> None:
+    from services.dispatcher import format_sale_message
+
+    text = format_sale_message({
+        "nft_name": "Plush Pepe #2675", "nft_address": "0:abc", "price_ton": 2500.0, "price_usd": 2727.5,
+        "marketplace": "getgems",
+        "attributes": {"model": "Amalgam", "background": "Dark Lilac", "symbol": "Wolf Rage"},
+    })
+    assert "GIFT SOLD!" in text and "Plush Pepe #2675" in text
+    assert "Model: Amalgam" in text and "Backdrop: Dark Lilac" in text and "Symbol: Wolf Rage" in text
+    assert "2 500 TON" in text and "≈ $2 727.5" in text and "Sold on GetGems" in text
+    no_usd = format_sale_message({"collection_name": "Teddy", "nft_index": 3, "price_ton": 5,
+                                  "marketplace": "marketapp"})
+    assert "Teddy #3" in no_usd and "≈" not in no_usd and "Sold on Marketapp" in no_usd
+
+
+@pytest.mark.asyncio
+async def test_process_sale_respects_model_filter(session):
+    from db.models import Attribute, Collection, Filter, User
+
+    session.add_all([User(tg_id=1, username="a"), User(tg_id=2, username="b")])
+    coll = Collection(name="Pepe", contract_address="EQsale_disp", source="seed")
+    session.add(coll)
+    await session.flush()
+    other = Attribute(collection_id=coll.id, type="model", value="Other")
+    session.add(other)
+    await session.flush()
+    session.add_all([Filter(user_id=1, collection_id=coll.id, is_active=True),
+                     Filter(user_id=2, collection_id=coll.id, model_id=other.id, is_active=True)])
+    await session.commit()
+
+    bot_mock = AsyncMock()
+    dispatcher = NotificationDispatcher(bot=bot_mock, session=session, redis=AsyncMock(), resolver=AsyncMock())
+    await dispatcher.process_sale({"collection_id": str(coll.id), "nft_name": "Pepe #1", "price_ton": 9,
+                                   "marketplace": "getgems", "attributes": {"model": "Amalgam"}})
+    assert dispatcher.stats["sales"] == 1
+    assert [c[0][0] for c in bot_mock.send_message.call_args_list] == [1]
+    assert "GIFT SOLD!" in bot_mock.send_message.call_args[0][1]
