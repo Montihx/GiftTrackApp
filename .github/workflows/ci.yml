@@ -10,6 +10,7 @@ jobs:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
       - run: python -m compileall -q core db services bot tests
+      - run: mypy
       - run: python -m pytest tests/ -q
   frontend:
     runs-on: ubuntu-latest

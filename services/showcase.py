@@ -165,7 +165,7 @@ async def _rarity_summaries(session: AsyncSession) -> dict[uuid.UUID, dict[str, 
     return {"counts": counts, "rarest": rarest}  # type: ignore[dict-item]
 
 
-def _summary_for(coll: Collection, agg: dict[str, Any]) -> dict[str, Any]:
+def _summary_for(coll: Collection, agg: Any) -> dict[str, Any]:
     c = agg["counts"].get(coll.id, {})
     out: dict[str, Any] = {ATTR_PLURAL[t]: c.get(t, 0) for t in ATTR_TYPES}
     rarest = agg["rarest"].get(coll.id)
@@ -191,7 +191,7 @@ async def list_collections(
 
     result = []
     for c in colls:
-        item = {
+        item: dict[str, Any] = {
             "id": str(c.id), "name": c.name, "icon_url": c.icon_url,
             "floor_price": _f(floors[c.id]), "floor_24h_change": changes[c.id],
             "items_count": c.items_count, "trackable": is_trackable(c.contract_address), "source": c.source,

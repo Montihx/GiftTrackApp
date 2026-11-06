@@ -456,7 +456,7 @@ class NotificationDispatcher:
 
     async def _match_users(
         self,
-        collection_id: str | None,
+        collection_id: Any,
         attributes: dict[str, Any],
         has_contact: bool = True,
         kind: str = "sale",
@@ -522,7 +522,7 @@ class NotificationDispatcher:
 
     async def _has_candidates(
         self,
-        collection_id: str | None,
+        collection_id: Any,
         attributes: dict[str, Any],
         kind: str,
         number: int | None = None,
@@ -540,7 +540,7 @@ class NotificationDispatcher:
 
     async def _send_to_subscribers(
         self,
-        collection_id: str | None,
+        collection_id: Any,
         attributes: dict[str, Any],
         text: str,
         keyboard: InlineKeyboardMarkup | None,

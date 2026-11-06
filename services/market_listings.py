@@ -93,7 +93,7 @@ class MarketListingWatcher:
 
     async def _fetch(self, source: str) -> list[dict[str, Any]]:
         if source == "mrkt":
-            body = {"collectionNames": [], "modelNames": [], "backdropNames": [], "symbolNames": [], "ordering": None,
+            body: dict[str, Any] = {"collectionNames": [], "modelNames": [], "backdropNames": [], "symbolNames": [], "ordering": None,
                     "lowToHigh": False, "maxPrice": None, "minPrice": None, "mintable": None, "number": None,
                     "count": 20, "cursor": "", "query": None, "promotedFirst": False}
             out: list[dict[str, Any]] = []

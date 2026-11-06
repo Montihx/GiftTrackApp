@@ -74,6 +74,6 @@ async def cache_get_json(redis: Redis, key: str) -> Any | None:
 
 async def stream_publish(redis: Redis, stream: str, payload: dict[str, Any]) -> str:
     """Публикация события в Redis Stream. Словарь сериализуется в поле 'data' целиком."""
-    entry = {"data": orjson.dumps(payload).decode()}
-    entry_id: bytes = await redis.xadd(stream, entry, maxlen=100_000, approximate=True)
-    return entry_id.decode()
+    entry: Any = {"data": orjson.dumps(payload).decode()}
+    entry_id = await redis.xadd(stream, entry, maxlen=100_000, approximate=True)
+    return entry_id.decode() if isinstance(entry_id, bytes) else str(entry_id)
