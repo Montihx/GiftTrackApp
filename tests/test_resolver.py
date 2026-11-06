@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from core.config import Settings
+from core.retry import PermanentError
 from services.resolver.resolver import OwnerResolver
 
 
@@ -17,7 +19,7 @@ async def test_resolve_cache_hit(session):
         return_value=b'{"tg_user_id": 123, "username": "wimp", "source": "cache"}'
     )
 
-    resolver = OwnerResolver(session=session, redis=redis_mock)
+    resolver = OwnerResolver(session=session, redis=redis_mock, settings=Settings(tonviewer_enabled=True))
     result = await resolver.resolve("EQwallet123")
 
     assert result["username"] == "wimp"
@@ -33,7 +35,7 @@ async def test_resolve_ton_dns(session):
     redis_mock.set = AsyncMock()
     redis_mock.lpush = AsyncMock()
 
-    resolver = OwnerResolver(session=session, redis=redis_mock)
+    resolver = OwnerResolver(session=session, redis=redis_mock, settings=Settings(tonviewer_enabled=True))
 
     with patch("services.resolver.resolver._http_request") as mock_http:
         mock_http.return_value = b'{"domains": ["wimp.ton"]}'
@@ -52,7 +54,7 @@ async def test_resolve_getgems(session):
     redis_mock.set = AsyncMock()
     redis_mock.lpush = AsyncMock()
 
-    resolver = OwnerResolver(session=session, redis=redis_mock)
+    resolver = OwnerResolver(session=session, redis=redis_mock, settings=Settings(tonviewer_enabled=True))
 
     with patch("services.resolver.resolver._http_request") as mock_http:
         # Первый вызов (TON DNS) — пусто, второй (GetGems) — username
@@ -75,7 +77,7 @@ async def test_resolve_pending(session):
     redis_mock.set = AsyncMock()
     redis_mock.lpush = AsyncMock()
 
-    resolver = OwnerResolver(session=session, redis=redis_mock)
+    resolver = OwnerResolver(session=session, redis=redis_mock, settings=Settings(tonviewer_enabled=True))
 
     with patch("services.resolver.resolver._http_request") as mock_http:
         mock_http.return_value = b'{"domains": []}'
@@ -98,7 +100,7 @@ async def test_resolve_saves_to_db(session):
     redis_mock.set = AsyncMock()
     redis_mock.lpush = AsyncMock()
 
-    resolver = OwnerResolver(session=session, redis=redis_mock)
+    resolver = OwnerResolver(session=session, redis=redis_mock, settings=Settings(tonviewer_enabled=True))
 
     with patch("services.resolver.resolver._http_request") as mock_http:
         mock_http.return_value = b'{"domains": ["ndryl.ton"]}'
@@ -110,3 +112,37 @@ async def test_resolve_saves_to_db(session):
     row = (await session.execute(stmt)).scalar_one()
     assert row.username == "ndryl"
     assert row.source == "ton_dns"
+
+
+@pytest.mark.asyncio
+async def test_dead_tonviewer_steps_are_skipped_without_requests(session):
+    """Tonviewer выключен (API мёртв): шаги DNS/tx не делают запросов и не ретраятся — алерт не задерживается."""
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+    redis_mock.set = AsyncMock()
+    redis_mock.lpush = AsyncMock()
+    resolver = OwnerResolver(session=session, redis=redis_mock, settings=Settings(tonviewer_enabled=False))
+
+    with patch("services.resolver.resolver._http_request") as mock_http:
+        mock_http.side_effect = PermanentError("HTTP 401 getgems")  # платный GetGems без ключа
+        first = await resolver.resolve("EQwalletA")
+        second = await resolver.resolve("EQwalletB")  # шаг GetGems уже на паузе — второго запроса нет
+
+    assert first["source"] == "pending" and second["source"] == "pending"
+    assert mock_http.call_count == 1  # только GetGems и только один раз
+
+
+@pytest.mark.asyncio
+async def test_with_retry_does_not_retry_permanent_errors():
+    from core.retry import with_retry
+
+    calls = 0
+
+    async def boom():
+        nonlocal calls
+        calls += 1
+        raise PermanentError("HTTP 404")
+
+    with pytest.raises(PermanentError):
+        await with_retry(boom, context="t")
+    assert calls == 1

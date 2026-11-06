@@ -59,7 +59,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings, get_settings, map_trait_type
 from core.redis_client import cache_set_json, collection_attrs_key
-from core.retry import with_retry
+from core.retry import PermanentError, with_retry
 from db.models import Attribute, Collection
 
 # nanoton (pytoniq-core) — ленивый импорт: нужен только на боевом пути блокчейна,
@@ -667,6 +667,9 @@ async def _http_request(
                 async with sess.request(method, url, json=json_body, params=params) as resp:
                     if resp.status >= 400:
                         body = (await resp.text())[:300]
+                        if resp.status < 500 and resp.status not in (408, 425, 429):
+                            # 404/401/403…: повтор не поможет (например, мёртвый API Tonviewer) — без ретраев
+                            raise PermanentError(f"HTTP {resp.status} {context}: {body}")
                         raise RuntimeError(f"HTTP {resp.status} {context}: {body}")
                     return await resp.read()
 

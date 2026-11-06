@@ -6,10 +6,20 @@ from typing import Any, Callable
 from loguru import logger
 from tenacity import (
     AsyncRetrying,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
+
+
+class PermanentError(RuntimeError):
+    """Ошибка, которую повтор не исправит (HTTP 4xx кроме 408/429): ретраи пропускаются."""
+
+    permanent = True
+
+
+def _retryable(exc: BaseException, retry_on: tuple[type[BaseException], ...]) -> bool:
+    return isinstance(exc, retry_on) and not getattr(exc, "permanent", False)
 
 
 def make_retrying(
@@ -28,7 +38,7 @@ def make_retrying(
     return AsyncRetrying(
         stop=stop_after_attempt(attempts),
         wait=wait_exponential(multiplier=min_wait, min=min_wait, max=max_wait),
-        retry=retry_if_exception_type(retry_on),
+        retry=retry_if_exception(lambda exc: _retryable(exc, retry_on)),
         reraise=True,
     )
 
