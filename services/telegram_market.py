@@ -31,7 +31,8 @@ from core.config import Settings
 from core.redis_client import STREAM_NFT_LISTINGS, cache_set_json, stream_publish
 from db.models import Attribute, Collection, Favorite, Filter
 
-SEEN_KEY = "tg_market:seen:{cid}"
+SEEN_KEY = "tg_market:seen2:{cid}"  # hash: slug -> базовая цена (прежний set tg_market:seen:* больше не используется)
+PRICE_CHANGE = 0.05  # смена цены больше 5% = перевыставление (дрейф курса Stars -> монета меньше)
 FLOOR_KEY = "tg_market:floor:{cid}"
 STATS_KEY = "tg_market:stats:{cid}"  # {"issued": N, "listed": N, "ton_per_star": x} — для API и уведомлений
 RATE_KEY = "tg_market:rate"  # GRAM за 1 Star (медиана по листингам, где есть обе цены)
@@ -111,14 +112,25 @@ def has_owner(item: dict[str, Any]) -> bool:
     return bool(item["seller_tg_id"] or item["seller_username"])
 
 
-def seen_key(item: dict[str, Any]) -> str:
-    """Слаг + БАЗОВАЯ цена: перевыставление по другой цене — новый листинг.
+def base_price(item: dict[str, Any]) -> float | None:
+    """Цена листинга для сравнения: Stars (не «плавает»), иначе цена в монете."""
+    v = item["price_stars"] if item["price_stars"] is not None else item["price_ton"]
+    return float(v) if v else None
 
-    Цена в TON у листинга за Stars — пересчёт по текущему курсу и «плавает», поэтому сравниваем по
-    Stars; по TON — только для листингов, выставленных за TON (resell_ton_only).
+
+def is_new_listing(item: dict[str, Any], stored: dict[str, float | None]) -> bool:
+    """Листинг новый, если слага ещё не было или цена изменилась больше чем на PRICE_CHANGE.
+
+    Дедуп по слагу, а не по «слаг|цена»: пересчёт цены (курс, TON/Stars) не должен превращать весь список
+    в «новые листинги» при каждом опросе.
     """
-    base = item["price_stars"] if item["price_stars"] is not None else item["price_ton"]
-    return f"{item['slug']}|{base}"
+    slug = item["slug"]
+    if slug not in stored:
+        return True
+    old, cur = stored[slug], base_price(item)
+    if not old or not cur:
+        return False
+    return abs(cur - old) / old > PRICE_CHANGE
 
 
 class TelegramMarketWatcher:
@@ -248,17 +260,29 @@ class TelegramMarketWatcher:
         if rate:
             await cache_set_json(self.redis, RATE_KEY, rate, ttl=STATE_TTL)
         key = SEEN_KEY.format(cid=cid)
-        bootstrap = not await self.redis.exists(key)
-        new = [i for i in items if not await self.redis.sismember(key, seen_key(i))]
-        for i in items:
-            await self.redis.sadd(key, seen_key(i))
-        await self.redis.expire(key, STATE_TTL)
+        raw = await self.redis.hgetall(key)
+        stored: dict[str, float | None] = {}
+        for k, v in (raw or {}).items():
+            try:
+                stored[k.decode() if isinstance(k, bytes) else k] = float(v) if v not in (b"", "", None) else None
+            except ValueError:
+                stored[k.decode() if isinstance(k, bytes) else k] = None
+        bootstrap = not stored
+        new = [i for i in items if is_new_listing(i, stored)]
+        if items:
+            await self.redis.hset(key, mapping={i["slug"]: str(base_price(i) or "") for i in items})
+            await self.redis.expire(key, STATE_TTL)
         if bootstrap:
             return 0
         if len(new) > self.settings.tg_market_max_new:
             # Реальных новых листингов за один опрос (~минуты) бывает единицы. Десятки — это сбой дедупликации
             # (смена курса, сброс Redis, другая сортировка): не рассылаем, состояние уже обновлено.
-            logger.warning(f"[tg_market] {self.collections[cid][0]}: {len(new)} «новых» за опрос — пропускаю (предохранитель)")
+            sample = new[0]
+            logger.warning(
+                f"[tg_market] {self.collections[cid][0]}: {len(new)} «новых» за опрос — пропускаю (предохранитель); "
+                f"пример {sample['slug']}: цена {base_price(sample)}, в базе {len(stored)} слагов, "
+                f"было {stored.get(sample['slug'])}"
+            )
             self.stats["suppressed"] = self.stats.get("suppressed", 0) + len(new)
             return 0
         name, address = self.collections[cid]

@@ -17,13 +17,20 @@ class FakeRedis:
     def __init__(self) -> None:
         self.kv: dict[str, bytes] = {}
         self.sets: dict[str, set[str]] = {}
+        self.hashes: dict[str, dict[str, str]] = {}
         self.stream: list[tuple[str, dict[str, str]]] = []
 
     async def set(self, key: str, value: bytes, ex: int | None = None) -> None:
         self.kv[key] = value
 
     async def exists(self, key: str) -> int:
-        return int(key in self.sets)
+        return int(key in self.sets or key in self.hashes)
+
+    async def hgetall(self, key: str) -> dict[bytes, bytes]:
+        return {k.encode(): v.encode() for k, v in self.hashes.get(key, {}).items()}
+
+    async def hset(self, key: str, mapping: dict[str, str]) -> None:
+        self.hashes.setdefault(key, {}).update(mapping)
 
     async def sismember(self, key: str, member: str) -> bool:
         return member in self.sets.get(key, set())
@@ -199,16 +206,17 @@ async def test_dispatcher_hidden_owner_and_buttons(session: Any) -> None:
     assert kb.inline_keyboard[0][0].url == "https://t.me/vasya" and kb.inline_keyboard[1][0].text == "🎁 Открыть подарок"
 
 
-def test_seen_key_ignores_floating_ton_equivalent() -> None:
-    from services.telegram_market import seen_key
+def test_is_new_listing_by_slug_and_price_change() -> None:
+    from services.telegram_market import is_new_listing
 
-    a = parse_resale_gift(unique(1, stars=1500, ton=20.0), {})
-    b = parse_resale_gift(unique(1, stars=1500, ton=20.7), {})  # тот же листинг, курс сдвинулся
-    c = parse_resale_gift(unique(1, stars=1400, ton=19.0), {})  # реальная смена цены
-    d = parse_resale_gift(unique(2, stars=None, ton=5.0), {})
-    assert a and b and c and d
-    assert seen_key(a) == seen_key(b) and seen_key(a) != seen_key(c)
-    assert seen_key(d) == "PlushPepe-2|5.0"
+    stored = {"PlushPepe-1": 1500.0, "PlushPepe-2": 5.0}
+    same = parse_resale_gift(unique(1, stars=1500, ton=20.7), {})  # тот же листинг, курс сдвинулся
+    drift = parse_resale_gift(unique(1, stars=1520, ton=21.0), {})  # дрейф < 5% — не новый
+    cheaper = parse_resale_gift(unique(1, stars=1400, ton=19.0), {})  # реальная смена цены
+    fresh = parse_resale_gift(unique(9, stars=1500), {})
+    assert same and drift and cheaper and fresh
+    assert not is_new_listing(same, stored) and not is_new_listing(drift, stored)
+    assert is_new_listing(cheaper, stored) and is_new_listing(fresh, stored)
 
 
 async def test_burst_of_new_listings_is_suppressed(session: Any) -> None:
