@@ -71,13 +71,14 @@ async def test_favorite_duplicate_rejected(session: Any) -> None:
 
 async def test_favorite_needs_exactly_one_target(session: Any) -> None:
     c = await _coll(session)
+    cid = c.id  # после rollback() объекты сессии expire'ятся — берём id заранее (иначе MissingGreenlet)
     session.add(User(tg_id=1))
     await session.commit()
     session.add(Favorite(user_id=1))  # ни коллекции, ни item
     with pytest.raises(IntegrityError):
         await session.commit()
     await session.rollback()
-    session.add(Favorite(user_id=1, collection_id=c.id, item_address="EQx"))  # оба сразу
+    session.add(Favorite(user_id=1, collection_id=cid, item_address="EQx"))  # оба сразу
     with pytest.raises(IntegrityError):
         await session.commit()
     await session.rollback()
@@ -85,6 +86,7 @@ async def test_favorite_needs_exactly_one_target(session: Any) -> None:
 
 async def test_collection_floor_nullable_and_seed_source(session: Any) -> None:
     c = await _coll(session)
+    await session.refresh(c)
     assert c.floor_price is None and c.source == "seed"
 
 
